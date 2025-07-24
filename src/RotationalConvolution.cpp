@@ -1,6 +1,7 @@
 #include "specfit/RotationalConvolution.hpp"
 #include <vector>
 #include <cmath>
+#include <omp.h>
 
 namespace specfit {
 
@@ -47,6 +48,7 @@ Vector rotational_broaden(const Vector& lam,
 
     /* ---------- convolution via sliding dot product ------------------ */
     Vector out(N);
+    #pragma omp parallel for schedule(static)
     for (std::ptrdiff_t i = 0; i < N; ++i) {
 
         // compute slice limits in index space

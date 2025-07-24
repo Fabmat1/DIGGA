@@ -7,13 +7,15 @@
 #include "specfit/CommonTypes.hpp"
 #include "specfit/SpectrumLoaders.hpp"
 #include <cxxopts.hpp>
+#include <Eigen/Core>
 #include <iostream>
-#include <thread>
+#include <omp.h>
 #include <algorithm>
 #include <cassert>
 #include <filesystem>
 #include "matplotlibcpp.h"
 #include <chrono>
+#include <thread>
 
 namespace fs = std::filesystem;
 using namespace specfit;
@@ -42,9 +44,13 @@ int main(int argc, char** argv) {
         expand_env(fit_cfg);
         
         // Setup
+        
         int nthreads = cli["threads"].as<int>();
         if (nthreads <= 0) nthreads = std::thread::hardware_concurrency();
-        
+
+        omp_set_num_threads(nthreads);
+        Eigen::setNbThreads(nthreads);
+
         std::vector<std::string> base_paths = 
             global_cfg["basePaths"].get<std::vector<std::string>>();
         

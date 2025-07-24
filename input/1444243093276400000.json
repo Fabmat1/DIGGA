@@ -1,7 +1,7 @@
 {
     "initialGuess": {
         "c1_vrad": {"value": 0.0, "freeze": false},
-        "c1_vsini": {"value": 7.0, "freeze": true},
+        "c1_vsini": {"value": 7.0, "freeze": false},
         "c1_zeta": {"value": 0.0, "freeze": true},
         "c1_teff": {"value": 25000.0, "freeze": false},
         "c1_logg": {"value": 5.5, "freeze": false},

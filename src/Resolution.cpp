@@ -2,6 +2,10 @@
 #include <algorithm>
 #include <cmath>
 
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
+
 namespace specfit {
 
 using Vector = Eigen::VectorXd;
@@ -32,6 +36,7 @@ static Vector degrade_resolution_cpu(const Vector& lam,
     const double* dLamData = binWidth.data();
 
     /* --------------------------- λ_i loop ----------------------------- */
+    #pragma omp parallel for schedule(static) if (_OPENMP)
     for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(n); ++i)
     {
         const double lambda_i = lamData[i];

@@ -50,7 +50,6 @@ find_library(CFITSIO_LIB cfitsio)
 add_library(specfit
     src/Spectrum.cpp
     src/SpectrumCache.cpp
-    src/ThreadPool.cpp
     src/NyquistGrid.cpp
     src/Rebin.cpp
     src/AkimaSpline.cpp
