@@ -13,11 +13,13 @@
 #include <cassert>
 #include <filesystem>
 #include "matplotlibcpp.h"
+#include <chrono>
 
 namespace fs = std::filesystem;
 using namespace specfit;
 
 int main(int argc, char** argv) {
+    auto start_time = std::chrono::steady_clock::now();
     try {
         cxxopts::Options opts("specfit", "Multi-dataset stellar spectrum fitting");
         opts.add_options()
@@ -200,6 +202,18 @@ int main(int argc, char** argv) {
         std::cerr << "Error: " << e.what() << '\n';
         return 1;
     }
+
+    auto end_time = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
+
+    int hours = duration / 3600;
+    int minutes = (duration % 3600) / 60;
+    int seconds = duration % 60;
+
+    std::cout << "\nTook: ";
+    if (hours > 0) std::cout << hours << "h ";
+    if (minutes > 0 || hours > 0) std::cout << minutes << "m ";
+    std::cout << seconds << "s\n";
     
     return 0;
 }

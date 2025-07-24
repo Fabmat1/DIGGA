@@ -112,172 +112,6 @@ static double param_for_axis(const std::string& n,
     throw std::runtime_error("Unsupported axis: " + n);
 }
 
-/* ------------------------------------------------------------------ *
- * 1)  original high-resolution spectrum                              *
- * ------------------------------------------------------------------ */
-Spectrum ModelGrid::load_spectrum(double teff,
-                                  double logg,
-                                  double z,
-                                  double he,
-                                  double xi) const
-{
-    /* --------------------------------------------------------------
-       build the interpolation hyper-cube
-       -------------------------------------------------------------- */
-
-    struct Node { double teff, logg, z, he, xi, weight; };
-
-    /* 2⁵ = 32 corner points is the absolute maximum we will need */
-    std::array<Node, 32> nodes;
-    nodes[0] = {0,0,0,0,0,1.0};
-    int n_nodes = 1;                      // number of valid entries
-
-    for (const auto& ax : axes_)
-    {
-        const double   p_val     = param_for_axis(ax.name,
-                                                  teff,logg,z,he,xi);
-        const Vector&  grid_axis = ax.values;
-
-        /* ------ degenerate axis (only one value) ------------------ */
-        if (grid_axis.size() == 1)
-        {
-            for (int i = 0; i < n_nodes; ++i)
-            {
-                Node& n = nodes[i];
-                if      (ax.name=="t")   n.teff = grid_axis[0];
-                else if (ax.name=="g")   n.logg = grid_axis[0];
-                else if (ax.name=="z")   n.z    = grid_axis[0];
-                else if (ax.name=="HHE") n.he   = grid_axis[0];
-                else if (ax.name=="x")   n.xi   = grid_axis[0];
-            }
-            continue;
-        }
-
-        /* ------ locate bounding grid points ----------------------- */
-        auto it = std::lower_bound(grid_axis.data(),
-                                   grid_axis.data()+grid_axis.size(),
-                                   p_val);
-
-        int hi = (it == grid_axis.data()+grid_axis.size())
-                  ? int(grid_axis.size()) - 1
-                  : int(it - grid_axis.data());
-        int lo = (hi == 0) ? 0 : hi - 1;
-
-        const double p_lin  = to_linear(ax.name, p_val);
-        const double lo_lin = to_linear(ax.name, grid_axis[lo]);
-        const double hi_lin = to_linear(ax.name, grid_axis[hi]);
-
-        const double alpha_hi = (hi_lin==lo_lin) ? 0.0
-                           : (p_lin - lo_lin) / (hi_lin - lo_lin);
-        const double alpha_lo = 1.0 - alpha_hi;
-
-        /* ------ duplicate the current set of nodes ---------------- */
-
-        /* copy existing nodes to the upper half of the array         */
-        for (int i = n_nodes-1; i >= 0; --i)
-            nodes[i + n_nodes] = nodes[i];
-
-        /* patch the coordinates + weights in-place                   */
-        for (int i = 0; i < n_nodes; ++i)
-        {
-            Node& a = nodes[i];           // low-side  node
-            Node& b = nodes[i+n_nodes];   // high-side node
-
-            if      (ax.name=="t")  { a.teff = grid_axis[lo];
-                                      b.teff = grid_axis[hi]; }
-            else if (ax.name=="g")  { a.logg = grid_axis[lo];
-                                      b.logg = grid_axis[hi]; }
-            else if (ax.name=="z")  { a.z    = grid_axis[lo];
-                                      b.z    = grid_axis[hi]; }
-            else if (ax.name=="HHE"){ a.he   = grid_axis[lo];
-                                      b.he   = grid_axis[hi]; }
-            else if (ax.name=="x")  { a.xi   = grid_axis[lo];
-                                      b.xi   = grid_axis[hi]; }
-
-            a.weight *= alpha_lo;
-            b.weight *= alpha_hi;
-        }
-        n_nodes *= 2;                     // doubled by one dimension
-    }
-
-    /* --------------------------------------------------------------
-       spectra fetch helper (per-call local cache)
-       -------------------------------------------------------------- */
-
-    struct CacheEntry { const Spectrum* sp = nullptr; bool ok = false; };
-
-    using Key = std::uint64_t;            // 5 × 12-bit packed integer
-    auto make_key = [](int t,int g,int z,int he,int x) -> Key
-    {
-        return  (Key)t         |
-               ((Key)g  << 12) |
-               ((Key)z  << 24) |
-               ((Key)he << 36) |
-               ((Key)x  << 48);
-    };
-
-    std::unordered_map<Key, CacheEntry> local_cache;
-    local_cache.reserve(n_nodes);         // never rehashes
-
-    auto fetch = [&](const Node& n) -> const Spectrum&
-    {
-        const int Ti = static_cast<int>(std::lround(n.teff));
-        const int Gi = static_cast<int>(std::lround(n.logg * 100));
-        const int Zi = static_cast<int>(std::lround(n.z    * 100));
-        const int Hi = static_cast<int>(std::lround(n.he   * 1000));
-        const int Xi = static_cast<int>(std::lround(n.xi   * 100));
-
-        Key key = make_key(Ti,Gi,Zi,Hi,Xi);
-
-        auto& e = local_cache[key];
-        if (!e.ok)
-        {
-            if (auto* sp = SpectrumCache::instance().try_get(key))
-            {
-                e.sp = sp;                // global cache hit
-            }
-            else
-            {
-                char path[128];
-                std::snprintf(path, sizeof(path),
-                              "%s/HHE/Z%02d/HE%03d/X%02d/G%03d/T%d.fits",
-                              base_.c_str(), Zi, Hi, Xi, Gi, Ti);
-
-                e.sp = &SpectrumCache::instance()
-                           .insert_if_absent(key,
-                                 [&]{ return read_fits(path); });
-            }
-            e.ok = true;
-        }
-        return *e.sp;
-    };
-
-    /* --------------------------------------------------------------
-       weighted sum of the corner spectra
-       -------------------------------------------------------------- */
-
-    Spectrum out;
-    bool   first = true;
-    double wsum  = 0.0;
-
-    for (int i = 0; i < n_nodes; ++i)
-    {
-        const Node&     nd = nodes[i];
-        const Spectrum& sp = fetch(nd);
-
-        if (first) { out = sp; out.flux.setZero(); first = false; }
-        out.flux += sp.flux * nd.weight;
-        wsum     += nd.weight;
-    }
-
-    if (wsum > 0.0) out.flux.array() /= wsum;
-    return out;
-}
-
-/* ------------------------------------------------------------------ *
- * 2)  NEW  — resolution-aware variant                                *
- * ------------------------------------------------------------------ */
-
 Spectrum ModelGrid::load_spectrum(double teff,
                                   double logg,
                                   double z,
@@ -371,8 +205,27 @@ Spectrum ModelGrid::load_spectrum(double teff,
        per-call local cache (≤ 32 entries)
        -------------------------------------------------------------- */
     struct CacheEntry { const Spectrum* sp=nullptr; bool ok=false; };
-    std::unordered_map<Key,CacheEntry> local_cache;
-    local_cache.reserve(nNodes);
+
+    /* A very small, flat cache – linear search is faster here than the
+       construction/destruction and hashing overhead of std::unordered_map. */
+    struct LocalCache
+    {
+        std::array<Key,32>        keys{};
+        std::array<CacheEntry,32> entries{};
+        std::size_t               n = 0;                 // #stored entries
+    
+        CacheEntry& operator[](Key k)
+        {
+            /* try to find existing key */
+            for (std::size_t i = 0; i < n; ++i)
+                if (keys[i] == k) return entries[i];
+    
+            /* new key – append */
+            keys[n] = k;
+            return entries[n++];         // default constructed CacheEntry
+        }
+    } 
+    local_cache;
 
     auto fetch = [&](const Node& n) -> const Spectrum&
     {
@@ -414,14 +267,14 @@ Spectrum ModelGrid::load_spectrum(double teff,
 
                 /* read FITS, degrade resolution, store in global cache */
                 e.sp = &SpectrumCache::instance()
-                           .insert_if_absent(key,[&]
-                           {
-                               Spectrum hi = read_fits(path);
-                               Spectrum lo = hi;
-                               lo.flux = degrade_resolution(hi.lambda, hi.flux,
-                                                            resOffset,resSlope);
-                               return lo;   // move-returned
-                           });
+                    .insert_if_absent(key,[&]
+                    {
+                        Spectrum hi = read_fits(path);
+                        Spectrum lo = hi;
+                        lo.flux = degrade_resolution(hi.lambda, hi.flux,
+                                                     resOffset,resSlope);
+                        return lo;   // move-returned
+                    });
             }
             e.ok = true;
         }

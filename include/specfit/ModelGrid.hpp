@@ -18,17 +18,6 @@ public:
               const std::string& rel_path);
     explicit ModelGrid(std::string abs_path);
 
-    /* ------------------------------------------------------------------
-     *  1) original: high-resolution spectrum (unchanged)                */
-    Spectrum load_spectrum(double teff,
-                           double logg,
-                           double z,
-                           double he,
-                           double xi) const;
-
-    /* ------------------------------------------------------------------
-     *  2) NEW: returns the spectrum already degraded to the instrumental
-     *     resolving power  R(λ)=resOffset+resSlope·λ .                  */
     Spectrum load_spectrum(double teff,
                            double logg,
                            double z,
