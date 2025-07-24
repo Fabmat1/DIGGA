@@ -1,0 +1,95 @@
+{
+    "initialGuess": {
+        "c1_vrad": {"value": 0.0, "freeze": false},
+        "c1_vsini": {"value": 7.0, "freeze": true},
+        "c1_zeta": {"value": 0.0, "freeze": true},
+        "c1_teff": {"value": 25000.0, "freeze": false},
+        "c1_logg": {"value": 5.5, "freeze": false},
+        "c1_xi": {"value": 0.0, "freeze": true},
+        "c1_z": {"value": 0.0, "freeze": true},
+        "c1_HE": {"value": -2.0, "freeze": false}
+    },
+    "grids": ["sdB/processed/"],
+    "observations": [
+        {
+            "files": [
+                {
+                    "filename": "/home/fabian/RVVD/spectra_processed/spec-6001-56072-0786_01.txt",
+                    "spectype": "ASCII_with_2_columns",
+                    "resOffset": 0.0,
+                    "resSlope": 0.32258064516,
+                    "barycorr": 0.0
+                },
+                {
+                    "filename": "/home/fabian/RVVD/spectra_processed/spec-6001-56072-0786_02.txt",
+                    "spectype": "ASCII_with_2_columns",
+                    "resOffset": 0.0,
+                    "resSlope": 0.32258064516,
+                    "barycorr": 0.0
+                },
+                {
+                    "filename": "/home/fabian/RVVD/spectra_processed/spec-6001-56072-0786_03.txt",
+                    "spectype": "ASCII_with_2_columns",
+                    "resOffset": 0.0,
+                    "resSlope": 0.32258064516,
+                    "barycorr": 0.0
+                },
+                {
+                    "filename": "/home/fabian/RVVD/spectra_processed/spec-6005-56090-0482_01.txt",
+                    "spectype": "ASCII_with_2_columns",
+                    "resOffset": 0.0,
+                    "resSlope": 0.32258064516,
+                    "barycorr": 0.0
+                },
+                {
+                    "filename": "/home/fabian/RVVD/spectra_processed/spec-6005-56090-0482_02.txt",
+                    "spectype": "ASCII_with_2_columns",
+                    "resOffset": 0.0,
+                    "resSlope": 0.32258064516,
+                    "barycorr": 0.0
+                },
+                {
+                    "filename": "/home/fabian/RVVD/spectra_processed/spec-6005-56090-0482_03.txt",
+                    "spectype": "ASCII_with_2_columns",
+                    "resOffset": 0.0,
+                    "resSlope": 0.32258064516,
+                    "barycorr": 0.0
+                },
+                {
+                    "filename": "/home/fabian/RVVD/spectra_processed/spec-57063-HD135728N245954B01_sp14-065_01.txt",
+                    "spectype": "ASCII_with_2_columns",
+                    "resOffset": 0.0,
+                    "resSlope": 0.32258064516,
+                    "barycorr": 0.0
+                },
+                {
+                    "filename": "/home/fabian/RVVD/spectra_processed/spec-59639-HD135728N245954M01_sp14-072_01.txt",
+                    "spectype": "ASCII_with_2_columns",
+                    "resOffset": 0.0,
+                    "resSlope": 0.32258064516,
+                    "barycorr": 0.0
+                },
+                {
+                    "filename": "/home/fabian/RVVD/spectra_processed/spec-59644-HD135728N245954M02_sp14-072_01.txt",
+                    "spectype": "ASCII_with_2_columns",
+                    "resOffset": 0.0,
+                    "resSlope": 0.32258064516,
+                    "barycorr": 0.0
+                }
+            ],
+            "ignore": [
+                [3932, 3935],
+                [3967, 3970],
+                [4610, 4655],
+                [5888, 5892],
+                [5894, 5898]
+            ],
+            "csplineAnchorpoints": [
+                [3000,3850,50],[3850,4050,100],[4050,4550,100],[4550,15050,200]
+            ],
+            "waveCut": [0, 100000]
+        }
+    ],
+    "outputPath": "./results",
+    "saveModel": "fits"
+}

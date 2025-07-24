@@ -1,0 +1,17 @@
+--- include/specfit/SpectrumCache.hpp
++++ include/specfit/SpectrumCache.hpp
+@@ -4,10 +4,14 @@
+ 
+ #include <unordered_map>
+ #include <shared_mutex>     // shared_mutex / shared_lock
+ #include <optional>
+ #include <functional>       // reference_wrapper
++#include <type_traits>
++#include <cstddef>          // std::size_t
++
++#include <ankerl/unordered_dense.h>      // fast flat hash map
+ 
+ namespace specfit {
+ 
+ /*
+  * Thread-safe cache.

@@ -1,0 +1,20 @@
+{
+    "basePaths": [
+        "./",
+        "/scratch1/${USER}/fitting/",
+        "/scratch2/${USER}/fitting/",
+        "/userdata/data/${USER}/synthetic_spectra/grids/",
+        "${HOME}/isis/synthetic_spectra/grids/",
+        "/data/stellar/modelgrids/",
+        "/work/dorsch/grids/",
+        "${HOME}/ISIS_models"
+    ],
+    "settings": {
+        "xrange": 500.0,
+        "errorEstimation": false,
+        "autoFreezeVsini": true,
+        "addTelluricModel": false,
+        "figIgnore": -1,
+        "untieParams": ["vrad"]
+    }
+}

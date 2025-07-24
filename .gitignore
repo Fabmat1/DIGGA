@@ -1,0 +1,5 @@
+build
+build-debug
+*.patch
+testspec.txt
+perf*

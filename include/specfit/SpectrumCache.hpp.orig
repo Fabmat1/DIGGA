@@ -1,0 +1,42 @@
+#pragma once
+#include "Spectrum.hpp"
+
+#include <unordered_map>
+#include <shared_mutex>     // shared_mutex / shared_lock
+#include <optional>
+#include <functional>       // reference_wrapper
+#include <cstddef>          // std::size_t
+
+namespace specfit {
+
+/*
+ * Thread-safe cache.
+ *  • Reads take a shared lock and, if you want, return a const reference
+ *    (zero-copy).  Back-compat bool-returning API kept, too.
+ *  • Writes take an exclusive lock.
+ */
+class SpectrumCache
+{
+public:
+    static SpectrumCache& instance();
+
+    /* New zero-copy API */
+    std::optional<std::reference_wrapper<const Spectrum>>
+    fetch(std::size_t hash) const;
+
+    /* Backward-compatible API used by existing code: copies into 'out'. */
+    bool fetch(std::size_t hash, Spectrum& out) const;
+
+    void insert(std::size_t hash, Spectrum spec);
+
+    /* Optional: pre-allocate */
+    void reserve(std::size_t n) { cache_.reserve(n); }
+
+private:
+    SpectrumCache() = default;
+
+    mutable std::shared_mutex                    mtx_;
+    std::unordered_map<std::size_t, Spectrum>    cache_;
+};
+
+} // namespace specfit
