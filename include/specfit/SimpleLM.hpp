@@ -8,17 +8,16 @@
 
 namespace specfit {
 
-// ---------------------------  user visible bits  -----------------------------
+/* ---------------------------  user visible bits  --------------------------- */
+/*  A value ≤ 0 means “determine automatically”.                              */
 
 struct LMSolverOptions {
-    int    max_iterations        = 500;
-    double gradient_tolerance    = 1e-6;
-    double step_tolerance        = 1e-8;
-    double chi2_tolerance        = 1e-12;
-    double initial_lambda        = 1e-3;
-    double lambda_up_factor      = 10.0;
-    double lambda_down_factor    = 0.2;
-    bool   verbose               = false;
+    int    max_iterations        = 200;      // hard upper limit
+    double gradient_tolerance    = 0;        // auto
+    double step_tolerance        = 0;        // auto
+    double chi2_tolerance        = 0;        // auto
+    double initial_lambda        = 0;        // auto
+    bool   verbose               = false;    // chatty?
 };
 
 struct LMSolverSummary {
@@ -26,12 +25,10 @@ struct LMSolverSummary {
     double initial_chi2       = 0.0;
     double final_chi2         = 0.0;
     bool   converged          = false;
-
-    /* 1-σ uncertainties *for the full parameter vector* (0 if fixed) */
-    std::vector<double> param_uncertainties;
+    std::vector<double> param_uncertainties;   // 1-σ; 0 = fixed
 };
 
-// --------------------  internal helper (column selection)  -------------------
+/* --------------------  internal helper (column selection)  ----------------- */
 
 inline
 void build_free_index(const std::vector<bool>& mask,
@@ -49,7 +46,7 @@ void build_free_index(const std::vector<bool>& mask,
     }
 }
 
-// -------------------  Levenberg–Marquardt driver routine  --------------------
+/* -------------------  Levenberg–Marquardt driver routine  ------------------ */
 
 template<typename Functor>
 LMSolverSummary
@@ -58,60 +55,108 @@ levenberg_marquardt(Functor&&                    func,
                     const std::vector<bool>&     free_mask,  // same size as x
                     const std::vector<double>&   lower,
                     const std::vector<double>&   upper,
-                    const LMSolverOptions&       opt = {})
+                    const LMSolverOptions&       user_opt = {})
 {
     LMSolverSummary summ;
     const int n = static_cast<int>(x.size());
 
-    /* ------------------------------------------------------------------ */
-    /*  build index that maps full parameter vector  ->  free parameters  */
-    /* ------------------------------------------------------------------ */
+    /* --------------------------------------------------------------- */
+    /*  map full parameter vector  ->  free (variable) parameters      */
+    /* --------------------------------------------------------------- */
     Eigen::VectorXi col_index;
     int n_free = 0;
     build_free_index(free_mask, col_index, n_free);
-    if (n_free == 0) {
-        summ.converged   = true;
-        summ.final_chi2  = 0.0;
+    if (n_free == 0) {                            // nothing to fit
+        summ.converged  = true;
+        summ.final_chi2 = 0.0;
         return summ;
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  allocate work arrays once                                         */
-    /* ------------------------------------------------------------------ */
+    /* --------------------------------------------------------------- */
+    /*  first model evaluation                                         */
+    /* --------------------------------------------------------------- */
     Eigen::VectorXd r;
     Eigen::MatrixXd J;
-
     func(x, &r, &J);
+
+    const std::size_t m = static_cast<std::size_t>(r.size());
     double chi2 = r.squaredNorm();
     summ.initial_chi2 = chi2;
 
+    /* --------------------------------------------------------------- */
+    /*  automatic tolerances and initial λ                             */
+    /* --------------------------------------------------------------- */
+    LMSolverOptions opt = user_opt;               // mutable copy
+
+    Eigen::VectorXd g0 = J.transpose() * r;
+    double gmax0       = g0.cwiseAbs().maxCoeff();
+    const double eps   = std::numeric_limits<double>::epsilon();
+
+    if (opt.gradient_tolerance <= 0.0)
+        opt.gradient_tolerance = 1e-4 * std::max(1.0, gmax0);
+
+    if (opt.step_tolerance <= 0.0)
+        opt.step_tolerance = 1e-6 * (1.0 + x.lpNorm<Eigen::Infinity>());
+
+    if (opt.chi2_tolerance  <= 0.0)
+        opt.chi2_tolerance  = 1e-8 * std::max(1.0, chi2);
+
+    if (opt.initial_lambda  <= 0.0) {
+        Eigen::VectorXd diag = (J.transpose() * J).diagonal();
+        opt.initial_lambda   = 1e-3 * diag.maxCoeff();
+        if (opt.initial_lambda == 0.0) opt.initial_lambda = 1e-3;
+    }
     double lambda = opt.initial_lambda;
 
-    /* ------------------------------------------------------------------ */
-    /*  main iteration loop                                               */
-    /* ------------------------------------------------------------------ */
+    /* --------------------------------------------------------------- */
+    /*  one-time allocations                                           */
+    /* --------------------------------------------------------------- */
+    Eigen::MatrixXd Jf( m, n_free );               // reduced Jacobian
+    Eigen::MatrixXd JTJ( n_free, n_free );
+    Eigen::VectorXd diag_JTJ( n_free );
+    Eigen::VectorXd g     ( n_free );
+    Eigen::VectorXd dx_free( n_free );
+    Eigen::VectorXd dx    ( n );
+
+    /* --------------------------------------------------------------- */
+    /*  main iteration loop                                            */
+    /* --------------------------------------------------------------- */
     for (int it = 0; it < opt.max_iterations; ++it) {
         summ.iterations = it + 1;
 
-        // build reduced ( m × n_free ) Jacobian that contains only columns
-        Eigen::MatrixXd Jf(r.size(), n_free);
+        /* ----- build reduced Jacobian (copy only the free columns) -- */
         for (int j = 0; j < n; ++j) {
             int col = col_index[j];
-            if (col >= 0) Jf.col(col) = J.col(j);
+            if (col >= 0) Jf.col(col).noalias() = J.col(j);
         }
 
-        Eigen::VectorXd g  = Jf.transpose() * r;             // gradient
+        /* ---------------------- g = Jᵀ r --------------------------- */
+        g.noalias() = Jf.transpose() * r;
         double gmax = g.cwiseAbs().maxCoeff();
-        if (gmax < opt.gradient_tolerance) {                 // converged
+        if (gmax < opt.gradient_tolerance) {       // gradient small
             summ.converged = true;
             break;
         }
 
-        Eigen::MatrixXd A = Jf.transpose() * Jf;
-        A.diagonal().array() += lambda;                      // LM damping
-        Eigen::VectorXd dx_free = -A.ldlt().solve(g);
+        /* ---------- JTJ = JᵀJ  (use rank-update, lower triangle) ---- */
+        JTJ.setZero();
+        JTJ.selfadjointView<Eigen::Lower>().rankUpdate(Jf.adjoint(), 1.0);
+        JTJ.template triangularView<Eigen::StrictlyUpper>() =
+            JTJ.transpose();                       // copy to upper
 
-        Eigen::VectorXd dx = Eigen::VectorXd::Zero(n);       // full step
+        diag_JTJ = JTJ.diagonal();
+
+        /* ------- (JTJ + λ D) Δx = −g   (D = diag(JTJ)) -------------- */
+        JTJ.diagonal().array() +=
+            lambda * (diag_JTJ.array() + 1e-20);   // Fletcher scaling
+
+        dx_free = -JTJ.ldlt().solve(g);            // SPD solve
+
+        if (dx_free.hasNaN() || !dx_free.allFinite())   // numerical failure
+            break;
+
+        /* --------------- copy step into full parameter vector ------- */
+        dx.setZero();
         for (int j = 0; j < n; ++j) {
             int col = col_index[j];
             if (col >= 0) dx[j] = dx_free[col];
@@ -122,64 +167,84 @@ levenberg_marquardt(Functor&&                    func,
             break;
         }
 
-        // candidate point
+        /* --------------------- candidate point ---------------------- */
         Eigen::VectorXd x_try = x + dx;
 
-        // honour simple box bounds
+        /* ---------- simple bound constraints (project) -------------- */
         for (int j = 0; j < n; ++j) {
             if (!lower.empty()) x_try[j] = std::max(x_try[j], lower[j]);
             if (!upper.empty()) x_try[j] = std::min(x_try[j], upper[j]);
         }
 
-        // evaluate new χ²
         Eigen::VectorXd r_try;
         Eigen::MatrixXd J_try;
         func(x_try, &r_try, &J_try);
         double chi2_try = r_try.squaredNorm();
 
-        const bool accept = chi2_try < chi2;
+        /* ------------------- Powell’s ρ test ------------------------ */
+        Eigen::VectorXd tmp = lambda * (diag_JTJ.array() * dx_free.array()).matrix() - g;
+        double pred_red = 0.5 * dx_free.dot(tmp);
+        if (pred_red <= 0.0) pred_red = eps;
+
+        double rho     = (chi2 - chi2_try) / pred_red;
+        bool   accept  = rho > 0.0 && chi2_try < chi2;
+
         if (accept) {
-            const double dchi2 = chi2 - chi2_try;
+            /* --------------- successful iteration ------------------ */
             x.swap(x_try);
             r.swap(r_try);
             J.swap(J_try);
-            chi2     = chi2_try;
-            lambda   = std::max(lambda * opt.lambda_down_factor, 1e-12);
+            chi2 = chi2_try;
+
+            /* adaptive λ (MINPACK style) ---------------------------- */
+            double fac = std::max(1.0/3.0,
+                                  1.0 - std::pow(2.0*rho - 1.0, 3.0));
+            lambda *= fac;
+            lambda  = std::max(lambda, 1e-18);
+
             if (opt.verbose)
                 std::cout << "[LM]  iter " << it
+                          << "  ρ="  << rho
                           << "  χ²=" << chi2
-                          << "  λ="  << lambda << "  (accepted)\n";
-            if (std::abs(dchi2) < opt.chi2_tolerance) {
+                          << "  λ="  << lambda
+                          << "  (accepted)\n";
+
+            if (std::abs(pred_red) < opt.chi2_tolerance) {
                 summ.converged = true;
                 break;
             }
         } else {
-            lambda *= opt.lambda_up_factor;
+            /* ------------------- rejected step --------------------- */
+            lambda *= 2.0;
             if (opt.verbose)
                 std::cout << "[LM]  iter " << it
+                          << "  ρ="  << rho
                           << "  χ²=" << chi2_try
-                          << "  λ="  << lambda << "  (rejected)\n";
+                          << "  λ="  << lambda
+                          << "  (rejected)\n";
         }
     }
 
     summ.final_chi2 = chi2;
 
-    /* -------------  finished → propagate uncertainties -------------- */
+    /* ---------------------  propagate uncertainties  ---------------- */
     summ.param_uncertainties.assign(n, 0.0);
     if (n_free > 0) {
-        /* build final reduced Jacobian Jf once more ------------------- */
-        Eigen::MatrixXd Jf(r.size(), n_free);
+        /* reuse Jf and JTJ already allocated ------------------------- */
         for (int j = 0; j < n; ++j) {
             int col = col_index[j];
-            if (col >= 0) Jf.col(col) = J.col(j);
+            if (col >= 0) Jf.col(col).noalias() = J.col(j);
         }
-        Eigen::MatrixXd JTJ = Jf.transpose() * Jf;
+        JTJ.setZero();
+        JTJ.selfadjointView<Eigen::Lower>().rankUpdate(Jf.adjoint(), 1.0);
+        JTJ.template triangularView<Eigen::StrictlyUpper>() =
+            JTJ.transpose();
 
-        const double dof = std::max<int>(r.size() - n_free, 1);
-        const double var = r.squaredNorm() / dof;          // σ² ≈ χ²/dof
+        const double dof = std::max<std::size_t>(m - n_free, 1);
+        const double var = r.squaredNorm() / dof;             // σ² ≈ χ²/dof
 
-        Eigen::MatrixXd cov = JTJ.ldlt().solve(
-                                Eigen::MatrixXd::Identity(n_free, n_free));
+        Eigen::MatrixXd cov =
+            JTJ.ldlt().solve(Eigen::MatrixXd::Identity(n_free, n_free));
         cov *= var;
 
         for (int j = 0; j < n; ++j) {

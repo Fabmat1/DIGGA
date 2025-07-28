@@ -1,6 +1,7 @@
 #include "specfit/ModelGrid.hpp"
 #include "specfit/Resolution.hpp"
 #include "specfit/SpectrumCache.hpp"
+
 #include <CCfits/CCfits>
 #include <filesystem>
 #include <sstream>
@@ -8,33 +9,23 @@
 #include <iostream>
 #include <iomanip>
 #include <unordered_map>
-#include <cmath>        // pow, lround
-#include <algorithm>    // lower_bound
-#include <cstdint>      // uint64_t
-#include <cstring>      // memcpy
+#include <cmath>
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <array>
-#include <cstdio>
 
 namespace fs = std::filesystem;
 
-/* tiny helpers outside namespace ------------------------------------ */
+/* ---------- little helpers outside namespace ----------------------- */
 static std::string fmt(double v, int prec)
 {
-    std::ostringstream s;
-    s << std::fixed << std::setprecision(prec) << v;
+    std::ostringstream s; s << std::fixed << std::setprecision(prec) << v;
     return s.str();
 }
+static double to_linear(const std::string& ax, double v) { return v; }
 
-static double to_linear(const std::string& axis_name, double value)
-{
-    if (axis_name == "g" || axis_name == "HHE")
-        return std::pow(10.0, value);
-    return value;
-}
-
-/* ------------------------------------------------------------------ *
- * hashing helpers for (path,resOffset,resSlope)                      *
- * ------------------------------------------------------------------ */
+/* ---------- hashing helpers for (path,resOffset,resSlope) ---------- */
 static std::size_t hash_combine(std::size_t seed, std::size_t v) noexcept
 {
     seed ^= v + 0x9E3779B97F4A7C15ULL + (seed << 6) + (seed >> 2);
@@ -42,312 +33,211 @@ static std::size_t hash_combine(std::size_t seed, std::size_t v) noexcept
 }
 static std::size_t hash_double(double x) noexcept
 {
-    std::uint64_t bits;
-    static_assert(sizeof(bits) == sizeof(x));
-    std::memcpy(&bits, &x, sizeof(bits));
+    std::uint64_t bits; std::memcpy(&bits, &x, sizeof bits);
     return std::hash<std::uint64_t>{}(bits);
 }
 
-/* ==================================================================== */
+/* =================================================================== */
 namespace specfit {
 
-/* --------- small Eigen wrapper ------------------------------------- */
+/* -------- small Eigen wrapper -------------------------------------- */
 static Vector to_eigen(const std::vector<Real>& v)
-{
-    return Eigen::Map<const Vector>(v.data(), v.size());
-}
+{ return Eigen::Map<const Vector>(v.data(), v.size()); }
 
-/* --------- resolve grid base path ---------------------------------- */
+/* -------- resolve grid base path ----------------------------------- */
 static std::string
 resolve_grid(const std::vector<std::string>& bases,
              const std::string& rel_path)
 {
     for (const auto& b : bases) {
-        fs::path candidate = fs::path(b) / rel_path;
-        if (fs::exists(candidate / "grid.fits")) return candidate.string();
+        fs::path p = fs::path(b) / rel_path;
+        if (fs::exists(p / "grid.fits")) return p.string();
     }
-    throw std::runtime_error("Grid '" + rel_path +
-                             "' not found in any basePath.");
+    throw std::runtime_error("Grid '" + rel_path + "' not found.");
 }
 
-/* =========================  Ctors  ================================= */
-ModelGrid::ModelGrid(const std::vector<std::string>& base_paths,
+/* =======================  ctor helpers  ============================ */
+ModelGrid::ModelGrid(const std::vector<std::string>& bases,
                      const std::string& rel_path)
-    : base_(resolve_grid(base_paths, rel_path))
+: base_(resolve_grid(bases, rel_path))
 {
-    try {
-        CCfits::FITS f(base_ + "/grid.fits", CCfits::Read);
-        CCfits::ExtHDU& ext = f.extension(1);
-        const auto& cols    = ext.column();
-
-        for (const auto& [name, col] : cols) {
-            std::vector<Real> buf;
-            if (col->varLength())               col->read(buf, 1);
-            else if (col->repeat() == 1)        col->read(buf, 1, 1);
-            else                                col->read(buf, 1);
-            axes_.push_back(GridAxis{ name, to_eigen(buf) });
-        }
-    }
-    catch (const std::exception& e) {
-        throw std::runtime_error("Failed reading grid metadata in "
-                                 + base_ + "/grid.fits : " + e.what());
+    CCfits::FITS f(base_ + "/grid.fits", CCfits::Read);
+    CCfits::ExtHDU& ext = f.extension(1);
+    for (const auto& [name, col] : ext.column()) {
+        std::vector<Real> buf;
+        /* --- keep the robust logic from the original implementation --- */
+        if (col->varLength())               col->read(buf, 1);      // variable-length vector
+        else if (col->repeat() == 1)        col->read(buf, 1, 1);   // scalar column
+        else                                col->read(buf, 1);      // fixed-length vector
+        axes_.push_back({name, to_eigen(buf)});
     }
 }
+ModelGrid::ModelGrid(std::string abs) : base_(std::move(abs)) {}
 
-ModelGrid::ModelGrid(std::string abs_path)
-    : base_(std::move(abs_path))
-{}
-
-/* ======== helpers common to both load_spectrum variants ============ */
+/* -------------------- misc internal helpers ------------------------ */
 static double param_for_axis(const std::string& n,
-                             double teff, double logg,
-                             double z,    double he,
-                             double xi)
+                             double teff,double logg,double z,
+                             double he,double xi)
 {
-    if (n == "t")   return teff;
-    if (n == "g")   return logg;
-    if (n == "z")   return z;
-    if (n == "HHE") return he;
-    if (n == "x")   return xi;
-    throw std::runtime_error("Unsupported axis: " + n);
+    if (n=="t") return teff; if (n=="g") return logg;
+    if (n=="z") return z;    if (n=="HHE") return he;
+    if (n=="x") return xi;
+    throw std::runtime_error("Unsupported axis '"+n+"'.");
 }
 
-Spectrum ModelGrid::load_spectrum(double teff,
-                                  double logg,
-                                  double z,
-                                  double he,
-                                  double xi,
-                                  double resOffset,
-                                  double resSlope) const
+/* =================================================================== */
+Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
+                                  double he,double xi,
+                                  double resOffset,double resSlope) const
 {
-    /* --------------------------------------------------------------
-       interpolation hyper-cube   (≤ 2⁵ = 32 corner nodes)
-       -------------------------------------------------------------- */
-    struct Node { double teff,logg,z,he,xi,weight; };
+    /* ---------- build interpolation hyper-cube -------------------- */
+    struct Node { double t,g,z,h,x,w; };
+    std::array<Node,32> nodes{}; nodes[0] = {0,0,0,0,0,1}; int nN=1;
 
-    std::array<Node,32> nodes;
-    nodes[0]  = {0,0,0,0,0,1.0};
-    int nNodes = 1;
+    for (const auto& ax: axes_) {
+        const double p = param_for_axis(ax.name,teff,logg,z,he,xi);
+        const Vector& grid = ax.values;
 
-    for (const auto& ax : axes_)
-    {
-        const double   p_val = param_for_axis(ax.name,
-                                             teff,logg,z,he,xi);
-        const Vector&  grid  = ax.values;
-
-        /* ---- axis that is constant in the grid -------------------- */
-        if (grid.size()==1)
-        {
-            for (int i=0;i<nNodes;++i)
-            {
-                Node& n = nodes[i];
-                if      (ax.name=="t")   n.teff = grid[0];
-                else if (ax.name=="g")   n.logg = grid[0];
-                else if (ax.name=="z")   n.z    = grid[0];
-                else if (ax.name=="HHE") n.he   = grid[0];
-                else if (ax.name=="x")   n.xi   = grid[0];
+        if (grid.size()==1) {                 // constant axis
+            for (int i=0;i<nN;++i) {
+                if      (ax.name=="t") nodes[i].t = grid[0];
+                else if (ax.name=="g") nodes[i].g = grid[0];
+                else if (ax.name=="z") nodes[i].z = grid[0];
+                else if (ax.name=="HHE")nodes[i].h = grid[0];
+                else if (ax.name=="x") nodes[i].x = grid[0];
             }
             continue;
         }
 
-        /* ---- locate bounding indices ------------------------------ */
-        auto  it = std::lower_bound(grid.data(),
-                                    grid.data()+grid.size(),
-                                    p_val);
-        int hi = (it==grid.data()+grid.size())
-                 ? int(grid.size())-1
-                 : int(it-grid.data());
+        auto it = std::lower_bound(grid.data(),grid.data()+grid.size(),p);
+        int hi = (it==grid.data()+grid.size())?grid.size()-1:int(it-grid.data());
         int lo = (hi==0)?0:hi-1;
 
-        const double p_lin  = to_linear(ax.name,p_val);
-        const double lo_lin = to_linear(ax.name,grid[lo]);
-        const double hi_lin = to_linear(ax.name,grid[hi]);
+        double a_hi = (grid[hi]==grid[lo])?0.0
+                      :(to_linear(ax.name,p)-to_linear(ax.name,grid[lo]))
+                       /(to_linear(ax.name,grid[hi])-to_linear(ax.name,grid[lo]));
+        double a_lo = 1.0-a_hi;
 
-        const double alpha_hi = (hi_lin==lo_lin) ? 0.0
-                                 : (p_lin-lo_lin)/(hi_lin-lo_lin);
-        const double alpha_lo = 1.0-alpha_hi;
-
-        /* ---- duplicate existing nodes along this axis ------------- */
-        for (int i=nNodes-1;i>=0;--i)      // copy backwards
-            nodes[i+nNodes] = nodes[i];
-
-        for (int i=0;i<nNodes;++i)
-        {
-            Node& a = nodes[i];            // low  side
-            Node& b = nodes[i+nNodes];     // high side
-
-            if      (ax.name=="t")  { a.teff = grid[lo]; b.teff = grid[hi]; }
-            else if (ax.name=="g")  { a.logg = grid[lo]; b.logg = grid[hi]; }
-            else if (ax.name=="z")  { a.z    = grid[lo]; b.z    = grid[hi]; }
-            else if (ax.name=="HHE"){ a.he   = grid[lo]; b.he   = grid[hi]; }
-            else if (ax.name=="x")  { a.xi   = grid[lo]; b.xi   = grid[hi]; }
-
-            a.weight *= alpha_lo;
-            b.weight *= alpha_hi;
+        for (int i=nN-1;i>=0;--i) nodes[i+nN]=nodes[i];
+        for (int i=0;i<nN;++i) {
+            Node& A = nodes[i]; Node& B = nodes[i+nN];
+            if      (ax.name=="t"){A.t=grid[lo];B.t=grid[hi];}
+            else if (ax.name=="g"){A.g=grid[lo];B.g=grid[hi];}
+            else if (ax.name=="z"){A.z=grid[lo];B.z=grid[hi];}
+            else if (ax.name=="HHE"){A.h=grid[lo];B.h=grid[hi];}
+            else if (ax.name=="x"){A.x=grid[lo];B.x=grid[hi];}
+            A.w*=a_lo; B.w*=a_hi;
         }
-        nNodes *= 2;
+        nN*=2;
     }
 
-    /* --------------------------------------------------------------
-       fast cache key: pack five 12-bit indices into 64 bits
-       -------------------------------------------------------------- */
+    /* ---------- tiny per-call local cache (≤32) -------------------- */
     using Key = std::uint64_t;
-    auto pack_axes = [](int t,int g,int z,int he,int x)->Key
-    {
-        return  (Key)t         |
-               ((Key)g  <<12) |
-               ((Key)z  <<24) |
-               ((Key)he <<36) |
-               ((Key)x  <<48);
+    auto pack = [](int t,int g,int z,int h,int x)->Key{
+        return Key(t) | (Key(g)<<12) | (Key(z)<<24)
+                     | (Key(h)<<36) | (Key(x)<<48);
     };
+    struct Entry { SpectrumPtr sp; bool ok=false; };
 
-    /* --------------------------------------------------------------
-       per-call local cache (≤ 32 entries)
-       -------------------------------------------------------------- */
-    struct CacheEntry { const Spectrum* sp=nullptr; bool ok=false; };
-
-    /* A very small, flat cache – linear search is faster here than the
-       construction/destruction and hashing overhead of std::unordered_map. */
-    struct LocalCache
-    {
-        std::array<Key,32>        keys{};
-        std::array<CacheEntry,32> entries{};
-        std::size_t               n = 0;                 // #stored entries
-    
-        CacheEntry& operator[](Key k)
-        {
-            /* try to find existing key */
-            for (std::size_t i = 0; i < n; ++i)
-                if (keys[i] == k) return entries[i];
-    
-            /* new key – append */
-            keys[n] = k;
-            return entries[n++];         // default constructed CacheEntry
+    struct LocalCache {
+        std::array<Key,32> keys{};
+        std::array<Entry,32> ent{};
+        std::size_t n=0;
+        Entry& operator[](Key k){
+            for(std::size_t i=0;i<n;++i) if(keys[i]==k) return ent[i];
+            keys[n]=k; return ent[n++];                // new slot
         }
-    } 
-    local_cache;
+    } lc;
 
-    auto fetch = [&](const Node& n) -> const Spectrum&
-    {
-        /* ---- build packed key for the five axes ------------------- */
-        const int Ti = int(std::lround(n.teff));
-        const int Gi = int(std::lround(n.logg*100));   // unchanged hash
-        const int Zi = int(std::lround(n.z   *100));
-        const int Hi = int(std::lround(n.he  *1000));
-        const int Xi = int(std::lround(n.xi  *100));
+    /* ---------- helper to fetch / cache one corner ---------------- */
+    auto fetch = [&](const Node& nd)->const Spectrum& {
 
-        Key key = pack_axes(Ti,Gi,Zi,Hi,Xi);
+        int Ti=int(std::lround(nd.t));
+        int Gi=int(std::lround(nd.g*100));
+        int Zi=int(std::lround(nd.z*100));
+        int Hi=int(std::lround(nd.h*1000));
+        int Xi=int(std::lround(nd.x*100));
 
-        /* ---- incorporate resolution parameters -------------------- */
-        key = hash_combine(key, hash_double(resOffset));
-        key = hash_combine(key, hash_double(resSlope));
+        Key k = pack(Ti,Gi,Zi,Hi,Xi);
+        k = hash_combine(k, hash_double(resOffset));
+        k = hash_combine(k, hash_double(resSlope));
 
-        /* ---- lookup in the call-local cache ----------------------- */
-        auto& e = local_cache[key];
-        if (!e.ok)
-        {
-            /* ---- try the global SpectrumCache first --------------- */
-            if (auto* sp = SpectrumCache::instance().try_get(key))
-            {
-                e.sp = sp;           // global hit
-            }
-            else
-            {
-                /* ---- MISS: build the exact file name -------------- */
+        Entry& e = lc[k];
+        if (!e.ok) {
+            if (auto sp = SpectrumCache::instance().try_get(k))
+                e.sp = std::move(sp);                           // global hit
+            else {
                 std::ostringstream oss;
-                oss << base_ << "/HHE"
-                    << "/Z"  << fmt(n.z,  2)
-                    << "/HE" << fmt(n.he, 3)
-                    << "/X"  << fmt(n.xi, 2)
-                    << "/G"  << fmt(n.logg,3)
-                    << "/T"  << static_cast<int>(std::lround(n.teff))
-                    << ".fits";
-
+                oss<<base_<<"/HHE"
+                   <<"/Z"<<fmt(nd.z,2)
+                   <<"/HE"<<fmt(nd.h,3)
+                   <<"/X"<<fmt(nd.x,2)
+                   <<"/G"<<fmt(nd.g,3)
+                   <<"/T"<<Ti<<".fits";
                 const std::string path = oss.str();
 
-                /* read FITS, degrade resolution, store in global cache */
-                e.sp = &SpectrumCache::instance()
-                    .insert_if_absent(key,[&]
-                    {
-                        Spectrum hi = read_fits(path);
-                        Spectrum lo = hi;
-                        lo.flux = degrade_resolution(hi.lambda, hi.flux,
-                                                     resOffset,resSlope);
-                        return lo;   // move-returned
-                    });
+                e.sp = SpectrumCache::instance()
+                         .insert_if_absent(k,[&]{
+                             Spectrum hi = read_fits(path);
+                             Spectrum lo = hi;
+                             lo.flux = degrade_resolution(hi.lambda,hi.flux,
+                                                          resOffset,resSlope);
+                             return lo;
+                         });
             }
             e.ok = true;
         }
         return *e.sp;
     };
 
-    /* --------------------------------------------------------------
-       weighted sum of the corner spectra
-       -------------------------------------------------------------- */
-    Spectrum out;
-    bool   first = true;
-    double wsum  = 0.0;
+    /* ---------- weighted sum over the cube ------------------------ */
+    Spectrum out; bool first=true; double wsum=0.0;
 
-    for (int i=0;i<nNodes;++i)
-    {
-        const Node&     nd = nodes[i];
-        const Spectrum& sp = fetch(nd);
-
-        if (first){ out = sp; out.flux.setZero(); first = false; }
-        out.flux += sp.flux * nd.weight;
-        wsum     += nd.weight;
+    for(int i=0;i<nN;++i){
+        const Spectrum& sp = fetch(nodes[i]);
+        if(first){ out = sp; out.flux.setZero(); first=false; }
+        out.flux += sp.flux * nodes[i].w;
+        wsum     += nodes[i].w;
     }
-
-    if (wsum>0.0) out.flux.array() /= wsum;
+    if(wsum>0.0) out.flux.array() /= wsum;
     return out;
 }
 
 /* ------------------------------------------------------------------ *
- * read_fits()   (unchanged except for namespace)                     *
+ *                read_fits()   (unchanged)                           *
  * ------------------------------------------------------------------ */
 Spectrum ModelGrid::read_fits(const std::string& path) const
 {
     using Vec = std::vector<Real>;
-    static std::unordered_map<std::string, Vector> wave_cache;
+    static std::unordered_map<std::string,Vector> wave_cache;
 
     Vector lam;
-    auto it = wave_cache.find(base_);
-    if (it != wave_cache.end()) lam = it->second;
+    if (auto it = wave_cache.find(base_); it!=wave_cache.end()) lam=it->second;
     else {
-        fs::path lam_path = fs::path(base_) / "HHE" / "lambda.fits";
-        if (fs::exists(lam_path)) {
-            CCfits::FITS fl(lam_path.string(), CCfits::Read);
-            CCfits::ExtHDU& ext_l = fl.extension(1);
-            Vec tmp; ext_l.column("l").read(tmp, 1, ext_l.rows());
-            lam = Eigen::Map<Vector>(tmp.data(), tmp.size());
-            wave_cache.emplace(base_, lam);
+        fs::path lp = fs::path(base_) / "HHE" / "lambda.fits";
+        if (fs::exists(lp)){
+            CCfits::FITS fl(lp.string(), CCfits::Read);
+            CCfits::ExtHDU& e = fl.extension(1);
+            Vec tmp; e.column("l").read(tmp,1,e.rows());
+            lam = Eigen::Map<Vector>(tmp.data(),tmp.size());
+            wave_cache.emplace(base_,lam);
         }
     }
 
     CCfits::FITS f(path, CCfits::Read);
     CCfits::ExtHDU& ext = f.extension(1);
 
-    Vec fl; ext.column("f").read(fl, 1, ext.rows());
-    if (lam.size() == 0) {
-        Vec ltmp; ext.column("l").read(ltmp, 1, ext.rows());
-        lam = Eigen::Map<Vector>(ltmp.data(), ltmp.size());
-        wave_cache.emplace(base_, lam);
+    Vec fl; ext.column("f").read(fl,1,ext.rows());
+    if(lam.size()==0){
+        Vec lt; ext.column("l").read(lt,1,ext.rows());
+        lam = Eigen::Map<Vector>(lt.data(),lt.size());
+        wave_cache.emplace(base_,lam);
     }
 
     Spectrum sp;
     sp.lambda = lam;
-    sp.flux   = Eigen::Map<Vector>(fl.data(), fl.size());
-    sp.sigma  = Vector::Ones(sp.lambda.size());
-
-    static std::unordered_map<std::string,bool> said;
-    if (!said[path]) {
-        said[path] = true;
-        std::cout << "[grid] " << fs::path(path).filename().string()
-                  << "  λ=[" << lam.minCoeff() << " … " << lam.maxCoeff() << "]"
-                  << "  n="  << lam.size()
-                  << "  flux-range=[" << sp.flux.minCoeff()
-                  << " … " << sp.flux.maxCoeff() << "]\n";
-    }
+    sp.flux   = Eigen::Map<Vector>(fl.data(),fl.size());
+    sp.sigma  = Vector::Ones(lam.size());
     return sp;
 }
 

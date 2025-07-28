@@ -6,6 +6,7 @@
 #include "specfit/ReportUtils.hpp"
 #include "specfit/CommonTypes.hpp"
 #include "specfit/SpectrumLoaders.hpp"
+#include "specfit/SpectrumCache.hpp"
 #include <cxxopts.hpp>
 #include <Eigen/Core>
 #include <iostream>
@@ -16,29 +17,85 @@
 #include "matplotlibcpp.h"
 #include <chrono>
 #include <thread>
+#include <fstream>
 
 namespace fs = std::filesystem;
 using namespace specfit;
+
+// Function to find and load the JSON config
+nlohmann::json load_global_config() {
+    std::vector<std::string> search_paths = {
+        // 1. Current working directory
+        "global_settings.json",
+        
+        // 2. Same directory as executable
+        []() {
+            try {
+                auto exe_path = std::filesystem::canonical("/proc/self/exe");
+                return (exe_path.parent_path() / "global_settings.json").string();
+            } catch (...) {
+                return std::string("./global_settings.json");
+            }
+        }(),
+        
+        // 3. Relative to executable (alternative method)
+        []() {
+            try {
+                auto exe_path = std::filesystem::read_symlink("/proc/self/exe");
+                return (exe_path.parent_path() / "global_settings.json").string();
+            } catch (...) {
+                return std::string("./global_settings.json");
+            }
+        }(),
+        
+        // 4. Build directory (for development)
+        "../global_settings.json",
+        
+        // 5. Source directory (fallback)
+        "../../global_settings.json"
+    };
+    
+    for (const auto& path : search_paths) {
+        if (std::filesystem::exists(path)) {
+            std::ifstream file(path);
+            if (file.is_open()) {
+                try {
+                    nlohmann::json config;
+                    file >> config;
+                    std::cout << "Loaded config from: " << path << std::endl;
+                    return config;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error parsing JSON from " << path << ": " << e.what() << std::endl;
+                    continue;
+                }
+            }
+        }
+    }
+    
+    throw std::runtime_error("Could not find or load global_settings.json");
+}
 
 int main(int argc, char** argv) {
     auto start_time = std::chrono::steady_clock::now();
     try {
         cxxopts::Options opts("specfit", "Multi-dataset stellar spectrum fitting");
         opts.add_options()
-            ("global", "Global settings JSON", cxxopts::value<std::string>())
             ("fit", "Fit configuration JSON", cxxopts::value<std::string>())
             ("threads", "Number of threads", cxxopts::value<int>()->default_value("0"))
+            ("cache-size", "Maximum number of cache entries", cxxopts::value<int>()->default_value("100"))
             ("debug-plots", "Enable debug plotting output")
             ("h,help", "Show help");
         
         auto cli = opts.parse(argc, argv);
-        if (cli.count("help") || !cli.count("global") || !cli.count("fit")) {
+        if (cli.count("help") || !cli.count("fit")) {
             std::cout << opts.help() << '\n';
             return 0;
         }
+
+        specfit::SpectrumCache::instance().set_capacity(cli["cache-size"].as<int>());
         
         // Load configurations
-        auto global_cfg = load_json(cli["global"].as<std::string>());
+        auto global_cfg = load_global_config();
         auto fit_cfg = load_json(cli["fit"].as<std::string>());
         expand_env(global_cfg);
         expand_env(fit_cfg);
@@ -194,7 +251,7 @@ int main(int argc, char** argv) {
             untied_params =
                 global_cfg["settings"]["untieParams"].get<std::vector<std::string>>();
         
-        generate_results("results",
+        generate_results(fit_cfg["outputPath"].get<std::string>(),
                          workflow,
                          datasets,
                          model,

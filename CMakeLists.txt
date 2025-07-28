@@ -162,6 +162,9 @@ endif()
 # 8. Command-line executable
 # ---------------------------------------------------------------------------
 add_executable(specfit_cli src/main.cpp)
+# Copy global_settings.json to build directory next to executable
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/global_settings.json
+               ${CMAKE_CURRENT_BINARY_DIR}/global_settings.json COPYONLY)
 target_include_directories(specfit_cli PRIVATE extern)
 target_link_libraries(specfit_cli PRIVATE
     specfit
@@ -182,6 +185,10 @@ install(PROGRAMS src/specfit_multiplot.py
 # Compile-time constant with install location
 target_compile_definitions(specfit PRIVATE
     SPECFIT_INSTALL_DATADIR=\"${CMAKE_INSTALL_FULL_DATADIR}/specfit\")
+
+# Add this to your install section (section 9)
+install(FILES global_settings.json
+        DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 install(TARGETS specfit
         EXPORT  specfitTargets
