@@ -73,7 +73,17 @@ sudo pacman -S cuda                    # installs CUDA toolkit + drivers
 # pick your favourite AUR helper, e.g. yay or paru
 yay -S unordered_dense-git             # header-only, installs instantly
 
-3. Build Specfit (same on every distro)
+3. macOS
+
+# if not done yet: xcode-select --install
+# install homebrew, then
+brew install cmake git llvm eigen boost openblas cfitsio tbb nlohmann-json cxxopts
+# use recent clang
+export CC=/opt/homebrew/opt/llvm/bin/clang
+export CXX=/opt/homebrew/opt/llvm/bin/clang++
+# you may have to add  -DCMAKE_PREFIX_PATH="$(brew --prefix)" as an option for cmake
+
+4. Build Specfit (same on every distro)
 
 git clone https://github.com/<your-user>/specfit.git
 cd specfit
