@@ -18,7 +18,8 @@ static Vector degrade_resolution_cpu(const Vector& lam,
                                      double        resOffset,
                                      double        resSlope)
 {
-    constexpr double SIGMA_FROM_FWHM = 1.0 / (2.0 * std::sqrt(2.0 * std::log(2.0)));
+//    constexpr double SIGMA_FROM_FWHM = 1.0 / (2.0 * std::sqrt(2.0 * std::log(2.0)));
+    constexpr double SIGMA_FROM_FWHM = 0.42466090014400953;
     constexpr double KERNEL_RADIUS   = 5.0;   // ±5 σ  ⇒  99.9999 % of kernel
 
     const std::size_t n = lam.size();

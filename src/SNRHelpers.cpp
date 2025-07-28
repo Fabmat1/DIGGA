@@ -139,7 +139,8 @@ get_signal_to_noise(const Eigen::VectorXd& flux, int neighbor)
     const double sig = standard_deviation(ndist, mu);    // σ(∆ᵢ)
 
     // conversion: σ(flux) = σ(∆ᵢ) / sqrt(3/2)
-    constexpr double conversion = std::sqrt(1.5);
+//    constexpr double conversion = std::sqrt(1.5);
+    constexpr double conversion = 1.224744871391589;
     const double noise = sig / conversion;
 
     const double signal = median(flux);
