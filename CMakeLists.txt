@@ -38,8 +38,8 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(
         -Wno-deprecated-declarations
         -march=native
-        -funroll-loops
-        -ftree-vectorize
+        -Rpass=loop-unroll
+        -O3
         -fconstexpr-steps=2147483647  # Increase constexpr evaluation steps
     )
 endif()
