@@ -174,4 +174,3 @@ If you use this code in a publication, please cite
 ```
 
 Happy fitting!
-![Kuss Diga Monte GIF](https://media.tenor.com/23068886/raw)
