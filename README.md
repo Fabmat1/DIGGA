@@ -1,4 +1,6 @@
-# Specfit
+# DIGGA
+Dynamic Iterative General Grid-fitting Algorithm
+
 
 Modern C++20 framework to fit observed stellar spectra using synthetic model grids.
 
