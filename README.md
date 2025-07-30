@@ -29,13 +29,13 @@ Dynamic Iterative General Grid-fitting Algorithm
 
 ## Quick Start
 ```
-git clone https://github.com/<your-user>/specfit.git
-cd specfit
+git clone https://github.com/<your-user>/DIGGA.git
+cd DIGGA
 mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release           # add -DSPECFIT_ENABLE_CUDA=OFF to disable GPU
+cmake .. -DCMAKE_BUILD_TYPE=Release           # add -DDIGGA_ENABLE_CUDA=OFF to disable GPU
 make -j$(nproc)
 ctest                                          # optional
-./specfit_cli --global globals.json --fit run.json --threads 8
+./DIGGA_cli --global globals.json --fit run.json --threads 8
 ```
 
 ---
@@ -126,12 +126,12 @@ export CXX=/opt/homebrew/opt/llvm/bin/clang++
 
 ## 4. Build DIGGA (identical on every platform)
 ```
-git clone https://github.com/<your-user>/specfit.git
-cd specfit
+git clone https://github.com/<your-user>/DIGGA.git
+cd DIGGA
 mkdir build && cd build
 
-#   GPU on  (default): -DSPECFIT_ENABLE_CUDA=ON
-#   GPU off           : -DSPECFIT_ENABLE_CUDA=OFF
+#   GPU on  (default): -DDIGGA_ENABLE_CUDA=ON
+#   GPU off           : -DDIGGA_ENABLE_CUDA=OFF
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 
@@ -143,7 +143,7 @@ sudo make install         # optional, installs lib + CLI
 
 ## Running DIGGA
 ```
-specfit_cli --global globals.json --fit run.json [--threads N]
+DIGGA_cli --global globals.json --fit run.json [--threads N]
 ```
 
 * `globals.json` – general configuration (paths, hardware, etc.)  
@@ -158,7 +158,7 @@ specfit_cli --global globals.json --fit run.json [--threads N]
 |---------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
 | `Could NOT find Eigen3 (found version … 3.3.x)`               | Install/upgrade to Eigen ≥ 3.4 (see instructions above).                                                |
 | `Could NOT find unordered_dense`                              | Ensure the header resides in a CMake search path, e.g. `/usr/local/include/ankerl/unordered_dense`.     |
-| `CUDA toolkit not found`                                      | Install CUDA **or** rebuild with `-DSPECFIT_ENABLE_CUDA=OFF`.                                           |
+| `CUDA toolkit not found`                                      | Install CUDA **or** rebuild with `-DDIGGA_ENABLE_CUDA=OFF`.                                           |
 
 ---
 
@@ -166,10 +166,10 @@ specfit_cli --global globals.json --fit run.json [--threads N]
 DIGGA is released under the MIT license.  
 If you use this code in a publication, please cite
 ```
-@misc{DIGGA2024,
-  author  = {Your Name et al.},
+@misc{DIGGA2025,
+  author  = {Mattig et al.},
   title   = {DIGGA – Dynamic Iterative General Grid-fitting Algorithm},
-  year    = {2024},
+  year    = {2025},
   url     = {https://github.com/Fabmat1/DIGGA}
 }
 ```
