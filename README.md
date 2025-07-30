@@ -34,8 +34,8 @@ cd DIGGA
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release           # add -DDIGGA_ENABLE_CUDA=OFF to disable GPU
 make -j$(nproc)
-ctest                                          # optional
-./DIGGA_cli --global globals.json --fit run.json --threads 8
+sudo make install
+DIGGA --global globals.json --fit run.json --threads 8
 ```
 
 ---
@@ -135,7 +135,6 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 
-ctest                     # optional
 sudo make install         # optional, installs lib + CLI
 ```
 
@@ -143,7 +142,7 @@ sudo make install         # optional, installs lib + CLI
 
 ## Running DIGGA
 ```
-DIGGA_cli --global globals.json --fit run.json [--threads N]
+DIGGA --global globals.json --fit run.json [--threads N]
 ```
 
 * `globals.json` – general configuration (paths, hardware, etc.)  
