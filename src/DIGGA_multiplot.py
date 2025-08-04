@@ -1,23 +1,9 @@
-#!/usr/bin/env python3
-"""
-Create the same multi-panel PDF that MultiPanelPlotter produced but
-entirely in Python / matplotlib.
-
-Modifications w.r.t. the previous version
------------------------------------------
-1. X axes (inner ones in the upper three panels **and** the bottom χ
-   panel) now carry *minor* ticks as well.
-2. Bad (ignored) data points are excluded when the automatic y-limits
-   are determined.
-3. Y-axis labels renamed:
-      Panel 1 : “Continuum Flux”
-      Panel 2 : “Full Flux”
-      Panel 3 : “Normalized Flux”
-4. The wavelength label now reads “Wavelength [Å]” – the Å is *not* put
-   in LaTeX math mode and is therefore upright instead of italic.
-"""
 import sys, math
 import numpy as np
+
+# import matplotlib
+# matplotlib.use("module://mplcairo.qt")
+
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import AutoMinorLocator

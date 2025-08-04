@@ -139,14 +139,14 @@ std::string python_helper_path()
     namespace fs = std::filesystem;
 
     /* user override -------------------------------------------------- */
-    if (const char* e = std::getenv("SPECFIT_PY_HELPER");
+    if (const char* e = std::getenv("DIGGA_PY_HELPER");
         e && fs::exists(e))
         return e;
 
-#ifdef SPECFIT_INSTALL_DATADIR
+#ifdef DIGGA_INSTALL_DATADIR
     {
-        fs::path p = fs::path(SPECFIT_INSTALL_DATADIR)
-                     / "specfit_multiplot.py";
+        fs::path p = fs::path(DIGGA_INSTALL_DATADIR)
+                     / "DIGGA_multiplot.py";
         if (fs::exists(p)) return p.string();
     }
 #endif
@@ -156,19 +156,19 @@ std::string python_helper_path()
     char exe[4096]{};
     ssize_t n = ::readlink("/proc/self/exe", exe, sizeof(exe)-1);
     if (n>0) {
-        fs::path p = fs::path(exe).parent_path() / "specfit_multiplot.py";
+        fs::path p = fs::path(exe).parent_path() / "DIGGA_multiplot.py";
         if (fs::exists(p)) return p.string();
     }
 #else
     char exe[MAX_PATH];
     if (::GetModuleFileNameA(NULL, exe, MAX_PATH)) {
-        fs::path p = fs::path(exe).parent_path() / "specfit_multiplot.py";
+        fs::path p = fs::path(exe).parent_path() / "DIGGA_multiplot.py";
         if (fs::exists(p)) return p.string();
     }
 #endif
 
     /* last resort: rely on PATH ------------------------------------- */
-    return "specfit_multiplot.py";
+    return "DIGGA_multiplot.py";
 }
 
 } // unnamed namespace

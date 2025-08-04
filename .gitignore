@@ -3,3 +3,4 @@ build-debug
 *.patch
 testspec.txt
 perf*
+input/676673613609807360.json
