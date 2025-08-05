@@ -2,6 +2,8 @@
 Dynamic Iterative General Grid-fitting Algorithm  
 *Modern C++20 framework to fit observed stellar spectra with synthetic model grids.*
 
+Pronounce as : /ˈdɪɡɐ/
+
 ---
 
 ## Table of Contents
