@@ -5,58 +5,92 @@
 
 namespace specfit {
 
-Vector anchors_from_intervals(
-        const std::vector<std::tuple<double, double, double>>& intervals,
-        const Spectrum& spectrum) 
-{
-    std::vector<Real> xs;
 
-    // Collect non-ignored lambda values
-    std::vector<double> non_ignored_lambdas;
-    for (int i = 0; i < spectrum.lambda.size(); ++i) {
-        if (spectrum.ignoreflag[i] == 1) {  // Non-ignored
-            non_ignored_lambdas.push_back(spectrum.lambda[i]);
-        }
+/* ---------------------------------------------------------------------- */
+Vector anchors_from_intervals(
+        const std::vector<std::tuple<double,double,double>>& intervals,
+        const Spectrum& spectrum)
+{
+    /* ---------- spectrum sanity checks -------------------------------- */
+    if (spectrum.lambda.size() == 0)
+        throw std::runtime_error("anchors_from_intervals(): spectrum has size 0");
+
+    if (!spectrum.ignoreflag.empty() &&
+        static_cast<Eigen::Index>(spectrum.ignoreflag.size()) != spectrum.lambda.size())
+        throw std::runtime_error(
+            "anchors_from_intervals(): ignoreflag vector has different length "
+            "than spectrum.lambda");
+
+    if (!spectrum.lambda.allFinite())
+        throw std::runtime_error("anchors_from_intervals(): spectrum.lambda contains NaN/Inf");
+
+    /* ---------- collect non-ignored wavelengths ----------------------- */
+    std::vector<double> good_lambda;
+    good_lambda.reserve(spectrum.lambda.size());
+
+    for (Eigen::Index i = 0; i < spectrum.lambda.size(); ++i)
+    {
+        bool keep = spectrum.ignoreflag.empty() ? true
+                                                : (spectrum.ignoreflag[i] == 1);
+        if (keep) good_lambda.push_back(spectrum.lambda[i]);
     }
 
-    // Sort the non-ignored lambdas to ensure proper indexing
-    std::sort(non_ignored_lambdas.begin(), non_ignored_lambdas.end());
+    if (good_lambda.empty())
+        throw std::runtime_error(
+            "anchors_from_intervals(): after masking, no wavelength point is left");
 
-    // Determine the min and max of non-ignored lambdas
-    double min_lambda = non_ignored_lambdas.empty() ? 
-        std::numeric_limits<double>::max() : non_ignored_lambdas.front();
-    double max_lambda = non_ignored_lambdas.empty() ? 
-        std::numeric_limits<double>::lowest() : non_ignored_lambdas.back();
+    std::sort(good_lambda.begin(), good_lambda.end());
+    const double min_lambda = good_lambda.front();
+    const double max_lambda = good_lambda.back();
 
-    // Add boundary anchor points if we have enough non-ignored lambda values
-    if (non_ignored_lambdas.size() >= 20) {  // Need at least 20 points for 10th and (n-10)th
-        // Add anchor at 10th index (0-based, so index 9)
-        xs.push_back(non_ignored_lambdas[9]);
-        // Add anchor at (length-10)th index (0-based, so index length-10)
-        xs.push_back(non_ignored_lambdas[non_ignored_lambdas.size() - 10]);
-    } else if (non_ignored_lambdas.size() > 0) {
-        // If we don't have enough points, add the boundaries
+    /* ---------- build anchor list ------------------------------------- */
+    std::vector<double> xs;
+    xs.reserve(32 + intervals.size() * 16);   // heuristic
+
+    /* two boundary anchors (or the 10th / n-10th if enough points) */
+    if (good_lambda.size() >= 20)
+    {
+        xs.push_back(good_lambda[9]);
+        xs.push_back(good_lambda[good_lambda.size() - 10]);
+    }
+    else
+    {
         xs.push_back(min_lambda);
         xs.push_back(max_lambda);
     }
 
-    for (const auto& [lo, hi, step] : intervals) {
-        if (hi < lo || step <= 0) continue;
-        for (double x = lo; x <= hi + 1e-6; x += step) {
-            if (x >= min_lambda && x <= max_lambda) {  // Check if x is within non-ignored range
-                xs.push_back(x);
-            }
-        }
-        // Ensure 'hi' is present if it's within the non-ignored range
-        if (!xs.empty() && xs.back() < hi - 1e-6 && hi >= min_lambda && hi <= max_lambda) {
-            xs.push_back(hi);
-        }
+    /* user supplied intervals ----------------------------------------- */
+    for (const auto& tpl : intervals)
+    {
+        const double lo   = std::get<0>(tpl);
+        const double hi   = std::get<1>(tpl);
+        const double step = std::get<2>(tpl);
+
+        if (step <= 0)
+            throw std::runtime_error("anchors_from_intervals(): step ≤ 0 in interval");
+        if (hi < lo)
+            throw std::runtime_error("anchors_from_intervals(): hi < lo in interval");
+
+        /* iterate with a small epsilon so that “hi” itself is included */
+        for (double x = lo; x <= hi + 1e-6; x += step)
+            if (x >= min_lambda && x <= max_lambda) xs.push_back(x);
+
+        /* ensure hi is present if in range */
+        if (hi >= min_lambda && hi <= max_lambda) xs.push_back(hi);
     }
 
+    /* ---------- final clean-up ---------------------------------------- */
     std::sort(xs.begin(), xs.end());
     xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
 
-    return Eigen::Map<const Vector>(xs.data(), xs.size());
+    if (xs.size() < 2)
+        throw std::runtime_error(
+            "anchors_from_intervals(): fewer than two anchor points produced");
+
+    /* ---------- return an owning Eigen vector ------------------------- */
+    Vector out(xs.size());
+    for (std::size_t i = 0; i < xs.size(); ++i) out[i] = xs[i];
+    return out;           // owns its data, safe outside the function
 }
 
 /* ------------------------------------------------------------------ */

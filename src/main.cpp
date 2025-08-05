@@ -152,22 +152,27 @@ int main(int argc, char** argv) {
                 // Load spectrum
                 std::string fpath = file_cfg["filename"].get<std::string>();
                 std::string format = file_cfg["spectype"].get<std::string>();
+
                 Spectrum raw;
+
                 try {
                     raw = load_spectrum(fpath, format);
                 }
                 catch (const std::exception& ex) {
                     std::cerr << "Failed to read spectrum: " << ex.what() << '\n';
                 }
+
                 
-                // Build Nyquist grid and rebin
+                /* ------------------------------------------------------------
+                 *  Per-file settings (with fall-back to the “observation” level)
+                 * ------------------------------------------------------------ */
                 double res_offset = file_cfg["resOffset"].get<double>();
-                double res_slope = file_cfg["resSlope"].get<double>();
-                
+                double res_slope  = file_cfg["resSlope" ].get<double>();
+
                 Vector nyquist = build_nyquist_grid(
-                    raw.lambda.minCoeff(), raw.lambda.maxCoeff(),
-                    res_offset, res_slope);
-                
+                                raw.lambda.minCoeff(), raw.lambda.maxCoeff(),
+                                res_offset, res_slope);
+                            
                 Spectrum rebinned;
                 rebinned.lambda = nyquist;
                 rebinned.flux = trapezoidal_rebin(raw.lambda, raw.flux, nyquist);
@@ -178,29 +183,60 @@ int main(int argc, char** argv) {
                       "rebinned.lambda must be sorted (ascending)");
 
                 std::vector<int> flags(rebinned.lambda.size(), 1);
-                auto wave_cut = obs["waveCut"].get<std::array<double, 2>>();
+
+                /* ------------------------------------------------------------
+                 *  Per-file settings with fall-back to the observation level
+                 * ------------------------------------------------------------ */
+
+                /* --- wave-cut ------------------------------------------------ */
+                std::array<double,2> wave_cut;
+                if (file_cfg.contains("waveCut"))
+                    wave_cut = file_cfg["waveCut"].get<std::array<double,2>>();
+                else if (obs.contains("waveCut"))
+                    wave_cut = obs["waveCut"].get<std::array<double,2>>();
+                else   // no wave-cut given → keep everything
+                    wave_cut = { -std::numeric_limits<double>::infinity(),
+                                  +std::numeric_limits<double>::infinity() };
+
+                /* --- ignore ranges ------------------------------------------ */
+                std::vector<std::array<double,2>> ignore_ranges;
+                if (file_cfg.contains("ignore"))
+                    ignore_ranges = file_cfg["ignore"].get<std::vector<std::array<double,2>>>();
+                else if (obs.contains("ignore"))
+                    ignore_ranges = obs["ignore"].get<std::vector<std::array<double,2>>>();
+
+                /* --- flag pixels to be rejected / kept ---------------------- */
                 for (size_t j = 0; j < rebinned.lambda.size(); ++j) {
-                    // Apply cuts and masks
                     const double wl = rebinned.lambda[j];
 
                     if (wl < wave_cut[0] || wl > wave_cut[1])
                         flags[j] = 0;
 
-                    for (auto rng : obs["ignore"].get<std::vector<std::array<double,2>>>())
-                        if (wl >= rng[0] && wl <= rng[1])
+                    for (const auto &rng : ignore_ranges)
+                        if (wl >= rng[0] && wl <= rng[1]) {
                             flags[j] = 0;
+                            break;
+                        }
                 }
 
                 rebinned.ignoreflag = flags;
-                
-                // Setup continuum
-                std::vector<std::tuple<double, double, double>> cont_intervals;
-                for (auto arr : obs["csplineAnchorpoints"]) {
-                    cont_intervals.emplace_back(
-                        arr[0].get<double>(),
-                        arr[1].get<double>(),
-                        arr[2].get<double>());
+
+                /* --- cspline anchor-points ---------------------------------- */
+                nlohmann::json anchor_json;                // copy, not reference!
+                if (file_cfg.contains("csplineAnchorpoints"))
+                    anchor_json = file_cfg["csplineAnchorpoints"];
+                else if (obs.contains("csplineAnchorpoints"))
+                    anchor_json = obs["csplineAnchorpoints"];
+                else
+                    anchor_json = nlohmann::json::array();
+
+                std::vector<std::tuple<double,double,double>> cont_intervals;
+                for (const auto &arr : anchor_json) {
+                    cont_intervals.emplace_back(arr[0].get<double>(),
+                                                arr[1].get<double>(),
+                                                arr[2].get<double>());
                 }
+                
                 
                 Vector cont_x = anchors_from_intervals(cont_intervals, rebinned);
                 Vector flux_at_anchors = interp_linear(rebinned.lambda, rebinned.flux, cont_x);
@@ -225,19 +261,37 @@ int main(int argc, char** argv) {
             }
         }
         
-        // Run unified workflow
         UnifiedFitWorkflow::Config workflow_config;
-        workflow_config.verbose = true;
+
+        /* ------------------------------------------------------------------ */
+        /* generic flags the CLI already sets                                  */
+        workflow_config.verbose     = true;
         workflow_config.debug_plots = cli.count("debug-plots") > 0;
-        
-        /* read untied parameter list (optional) ---------------------- */
+
+        /* ------------------------------------------------------------------ */
+        /*  read optional tuning parameters from global_config.json            */
         if (global_cfg["settings"].contains("untieParams"))
             workflow_config.untie_params =
                 global_cfg["settings"]["untieParams"]
                           .get<std::vector<std::string>>();
 
-        UnifiedFitWorkflow workflow(datasets, model, workflow_config, 
-                                   frozen_status, nthreads);
+        /* ---- iterative noise -------------------------------------------- */
+        auto &cfg_json = global_cfg["settings"];
+        #define READ_OPT_INT(key, dst)   if (cfg_json.contains(key)) workflow_config.dst = cfg_json[key].get<int>();
+        #define READ_OPT_DBL(key, dst)   if (cfg_json.contains(key)) workflow_config.dst = cfg_json[key].get<double>();
+
+        READ_OPT_INT ("nitNoiseMax" ,  nit_noise_max );
+        READ_OPT_INT ("nitFitMax"   ,  nit_fit_max   );
+        READ_OPT_INT ("widthBoxPx"  ,  width_box_px  );
+        READ_OPT_DBL ("outlierSigmaLo", outlier_sigma_lo );
+        READ_OPT_DBL ("outlierSigmaHi", outlier_sigma_hi );
+        READ_OPT_DBL ("convRangeLo" ,  conv_range_lo );
+        READ_OPT_DBL ("convRangeHi" ,  conv_range_hi );
+        READ_OPT_DBL ("convFraction",  conv_fraction );
+
+        /* ------------------------------------------------------------------ */
+        UnifiedFitWorkflow workflow(datasets, model, workflow_config,
+                                    frozen_status, nthreads);
         workflow.run();
         
         /* ------------------------------------------------------------- */

@@ -6,6 +6,13 @@
 #include <iostream>
 #include <set>
 #include <numeric>
+#include <algorithm>
+#include <limits>
+#include <cmath>
+#include <Eigen/Core>
+#include <Eigen/Dense>
+
+using Eigen::ArrayXd;
 
 namespace specfit {
 
@@ -102,7 +109,9 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
                              "logg","xi","z","he" };
     
     for (int c = 0; c < n_components; ++c)
+    {
         for (std::size_t d = 0; d < datasets_.size(); ++d)
+        {
             for (int p = 0; p < 8; ++p)
             {
                 int idx = indexer_.get(c,static_cast<int>(d),p);
@@ -114,7 +123,10 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
                     default: break; // others unlimited
                 }
             }
+        }
+    }
 
+    
     /* ---- c)   decide which parameters are free ------------------------ */
     std::vector<bool> free_mask(Npar, false);
 
@@ -150,6 +162,7 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
     opt.max_iterations = max_iterations;
     opt.verbose        = config_.verbose;
 
+
     summary_ = levenberg_marquardt(
             [&cost](const Eigen::VectorXd& p,
                     Eigen::VectorXd*       r,
@@ -157,6 +170,7 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
             { cost(p, r, J); },
             x, free_mask, lo, hi, opt);
     last_free_mask_ = free_mask;                            
+
 
     Eigen::Map<Eigen::VectorXd>(unified_params_.data(), Npar) = x;
     /* -------------------------  debug plots  ------------------------- */
@@ -199,134 +213,181 @@ void UnifiedFitWorkflow::stage3_full() {
 }
 
 
-/* ------------------------------------------------------------------------- */
-/*  Stage-4 : iterative 10-σ outlier rejection + re-scaling                  */
-/* ------------------------------------------------------------------------- */
-void UnifiedFitWorkflow::stage4_outlier_rejection()
+double UnifiedFitWorkflow::chi2_current() const
 {
-    bool any_flagged = true;
-    int  iteration   = 0;
-
-    while (any_flagged) {
-        any_flagged = false;
-        ++iteration;
-
-        /* ---------- inspect residuals, flag > 10-σ points ---------------- */
-        for (std::size_t d = 0; d < datasets_.size(); ++d) {
-            Vector model = get_model_for_dataset(d);
-            auto&  ds    = datasets_[d];
-
-            for (int i = 0; i < ds.obs.flux.size(); ++i) {
-                if (!ds.obs.ignoreflag[i]) continue;        // already rejected
-                double res = (model[i] - ds.obs.flux[i]) / ds.obs.sigma[i];
-                if (std::abs(res) > 10.0) {
-                    ds.obs.ignoreflag[i] = 0;               // throw out
-                    any_flagged = true;
-                }
-            }
-        }
-    }
-
-    if (config_.verbose)
-        std::cout << "[Stage 5]  finished after " << iteration
-                  << " iteration(s)\n";
-}
-
-/* ------------------------------------------------------------------------- */
-/*  Stage-5 : global error rescaling (χ² / dof → 1)                          */
-/* ------------------------------------------------------------------------- */
-void UnifiedFitWorkflow::stage5_error_scaling()
-{
-    using std::fabs;
-    using std::sqrt;
-    using std::isfinite;
-
-    /* ------------------------------------------------------------------
-       0.  Remember *original* σ only once (deep copies).
-           -------------------------------------------------------------- */
-    static std::vector<Vector> original_sigmas;
-    if (original_sigmas.empty()) {
-        original_sigmas.reserve(datasets_.size());
-        for (const auto &ds : datasets_)
-            original_sigmas.push_back(ds.obs.sigma);
-    }
-
-    /* ------------------------------------------------------------------
-       1.  Per-pixel outlier handling  (σ_i → σ_i · |χ_i| / χ_thres)
-           -------------------------------------------------------------- */
-    const double chi_thres_pos = (std::get<1>(config_.chi_thresholds) != 0) ? fabs(std::get<1>(config_.chi_thresholds)) : 2.0;
-    const double chi_thres_neg = (std::get<0>(config_.chi_thresholds) != 0) ? -fabs(std::get<0>(config_.chi_thresholds)) : -2.0;
-
-    //  keep a second work-copy of σ that we will update step by step
-    std::vector<Vector> work_sigma = original_sigmas;
-
-    std::size_t n_kept = 0;            // number of pixels entering χ²
-    double      chi2   = 0.0;          // accumulated χ² after step (1)
+    double chi2 = 0.0;
 
     for (std::size_t d = 0; d < datasets_.size(); ++d)
     {
-        const Vector model = get_model_for_dataset(d);
-        const auto  &flux  = datasets_[d].obs.flux;
-
-        for (int i = 0; i < flux.size(); ++i)
-        {
-            if (datasets_[d].obs.ignoreflag[i] == 0)                          continue;
-            const double sig0 = original_sigmas[d][i];
-            if (!isfinite(sig0) || sig0 <= 0.0)                               continue;
-
-            /* ----- χ_i with the ORIGINAL σ_i --------------------------- */
-            const double chi_i = (flux[i] - model[i]) / sig0;
-
-            double fac = 1.0;
-            if (chi_i >  chi_thres_pos) fac = fabs(chi_i) /  chi_thres_pos;
-            if (chi_i <  chi_thres_neg) fac = fabs(chi_i) / -chi_thres_neg;
-
-            work_sigma[d][i] = sig0 * fac;
-
-            /* ----- accumulate χ² with the *enlarged* σ ---------------- */
-            const double diff = flux[i] - model[i];
-            chi2 += (diff * diff) / (work_sigma[d][i] * work_sigma[d][i]);
-            ++n_kept;
-        }
+        Vector model      = get_model_for_dataset(d);
+        Vector residuals  = (model - datasets_[d].obs.flux)
+                            .cwiseQuotient(datasets_[d].obs.sigma);
+        chi2 += residuals.dot(residuals);  // dot product with itself
     }
-    if (n_kept == 0) return;                       // nothing noticed
-
-    /* ------------------------------------------------------------------
-       2.  Global rescaling so that χ²_red = 1 
-           -------------------------------------------------------------- */
-    
-    // Count the number of free parameters from the last optimization stage
-    const int n_free_params = std::count(last_free_mask_.begin(), last_free_mask_.end(), true);
-    
-    const double dof = static_cast<double>(n_kept) - static_cast<double>(n_free_params);
-    if (dof > 0.0) {
-        const double factor     = sqrt(chi2 / dof);      // = √χ²_red
-        if (factor > 0.0 && fabs(factor - 1.0) > 1e-12)  // avoid work
-            for (auto &vec : work_sigma)
-                for (double &s : vec) s *= factor;
-    }
-
-    /* ------------------------------------------------------------------
-       3.  Commit the new σ to the data sets
-           -------------------------------------------------------------- */
-    for (std::size_t d = 0; d < datasets_.size(); ++d)
-        datasets_[d].obs.sigma = work_sigma[d];
-
+    return chi2;
 }
 
-void UnifiedFitWorkflow::stage6_final() { stage3_full(); }
+
+/* ------------------------------------------------------------------------- */
+/*  Stage-4 : iterative noise re-scaling  +  outlier rejection (fast IRLS)   */
+/* ------------------------------------------------------------------------- */
+void UnifiedFitWorkflow::stage4_rescale_and_reject()
+{
+    const auto &P      = config_;
+    const int   NDS    = static_cast<int>(datasets_.size());
+
+    /* ---------- store pristine σ only once ----------------------------- */
+    static std::vector<ArrayXd> sigma0;
+    if (sigma0.empty()) {
+        sigma0.reserve(NDS);
+        for (const auto &ds : datasets_)
+            sigma0.emplace_back(ds.obs.sigma);
+    }
+
+    /* ---------- scratch arrays per data set ---------------------------- */
+    std::vector<ArrayXd> chi_arr (NDS);
+    std::vector<ArrayXd> scl_arr (NDS);
+
+    bool  weights_changed = true;
+    int   pass            = 0;
+
+    /* ======================   outer IRLS loop   ======================== */
+    while (weights_changed && pass < P.nit_noise_max)
+    {
+        weights_changed = false;
+        ++pass;
+
+        /* =========   data set loop  (parallel if requested)   ========= */
+        #pragma omp parallel for schedule(dynamic) if(nthreads_>1)
+        for (int d = 0; d < NDS; ++d)
+        {
+            auto &ds   = datasets_[static_cast<std::size_t>(d)];
+            const int nbin = ds.obs.flux.size();
+
+            /* ---- make sure scratch buffers have correct size ---------- */
+            if (chi_arr[d].size() != nbin) {
+                chi_arr[d].resize(nbin);
+                scl_arr[d].resize(nbin);
+            }
+
+            /* ---- reset σ to pristine values --------------------------- */
+            ds.obs.sigma = sigma0[d];
+
+            /* ---- model counts ----------------------------------------- */
+            ArrayXd model = get_model_for_dataset(static_cast<std::size_t>(d));
+
+            /* ---- χ array (ignored bins keep 0) ------------------------ */
+            ArrayXd &chi = chi_arr[d];
+            chi.setZero();
+            for (int i = 0; i < nbin; ++i)
+                if (ds.obs.ignoreflag[i] && ds.obs.sigma[i] > 0.0)
+                    chi[i] = (ds.obs.flux[i] - model[i]) / ds.obs.sigma[i];
+
+            /* ---- local scale factors ---------------------------------- */
+            ArrayXd &scale = scl_arr[d];
+            scale.setOnes();
+
+            const int w  = P.width_box_px;
+            const int ws = 2 * w;               /* smoothing half-width   */
+
+            std::vector<double> neigh;
+            neigh.reserve(2 * w);
+
+            bool local_changed = false;
+
+            for (int i = 0; i < nbin; ++i)
+            if (ds.obs.ignoreflag[i])
+            {
+                /* ---- neighbourhood (excluding i) --------------------- */
+                neigh.clear();
+                const int lo = std::max(0, i - w);
+                const int hi = std::min(nbin - 1, i + w);
+
+                for (int j = lo; j <= hi; ++j)
+                    if (j != i && ds.obs.ignoreflag[j])
+                        neigh.push_back(chi[j]);
+
+                if (neigh.size() < 2) continue;
+
+                ArrayXd neighArr = Eigen::Map<ArrayXd>(neigh.data(),
+                                                       neigh.size());
+                const double mean  = neighArr.mean();
+                const double sdev  = std::sqrt(
+                        (neighArr - mean).square().sum() /
+                        std::max<int>(neighArr.size() - 1, 1));
+
+                scale[i] = sdev;                        /* local σ */
+
+                /* ---- self-outlier test from 2nd pass on -------------- */
+                if (pass > 1) {
+                    const double delt = chi[i] - mean;
+                    if (delt < -P.outlier_sigma_lo * sdev ||
+                        delt >  P.outlier_sigma_hi * sdev)
+                    {
+                        ds.obs.ignoreflag[i] = 0;
+                        local_changed        = true;
+                    }
+                }
+            }
+
+            /* ---- smooth scale with simple box filter ----------------- */
+            ArrayXd tmp = scale;
+            for (int i = 0; i < nbin; ++i)
+            if (ds.obs.ignoreflag[i])
+            {
+                const int lo = std::max(0, i - ws);
+                const int hi = std::min(nbin - 1, i + ws);
+                tmp[i] = scale.segment(lo, hi - lo + 1).mean();
+            }
+            scale.swap(tmp);
+
+            /* ---- convergence test ------------------------------------ */
+            const int tot = std::count_if(ds.obs.ignoreflag.begin(),
+                                          ds.obs.ignoreflag.end(),
+                                          [](int v){return v!=0;});
+            if (tot > 0)
+            {
+                int good = 0;
+                for (int i = 0; i < nbin; ++i)
+                    if (ds.obs.ignoreflag[i] &&
+                        scale[i] > P.conv_range_lo &&
+                        scale[i] < P.conv_range_hi)
+                        ++good;
+
+                if (good < P.conv_fraction * tot)
+                    local_changed = true;
+            }
+
+            /* ---- apply the scaling ----------------------------------- */
+            for (int i = 0; i < nbin; ++i)
+                ds.obs.sigma[i] *= scale[i];
+
+            /* ---- any change in this spectrum propagates globally ----- */
+            if (local_changed)
+                weights_changed = true;
+        }  /* -------- end data-set loop -------------------------------- */
+
+        /* -------- one warm-started LM step with new weights ----------- */
+        std::set<std::string> fp = { "all", "continuum" };
+        solve_stage(fp, 3);                          /* ≤ 3 LM iteration */
+    }  /* =====================   end outer loop   ======================= */
+
+    if (config_.verbose)
+        std::cout << "[IterNoise] passes: " << pass << '\n';
+}
+
+void UnifiedFitWorkflow::stage5_final() { stage3_full(); }
 
 /* ------------------------------------------------------------------------- */
 /*  public “run” orchestrator                                                */
 /* ------------------------------------------------------------------------- */
 void UnifiedFitWorkflow::run()
 {
-    std::cout << "[Stage 1] continuum only …\n";   stage1_continuum_only();
-    std::cout << "[Stage 2] continuum + vrad …\n"; stage2_continuum_vrad();
-    std::cout << "[Stage 3] full fit …\n";        stage3_full();
-    std::cout << "[Stage 4] outlier rejection …\n";stage4_outlier_rejection();
-    std::cout << "[Stage 5] error scaling …\n";   stage5_error_scaling();
-    std::cout << "[Stage 6] final fit …\n";       stage6_final();
+    std::cout << "[Stage 1] Continuum Fit …\n";   stage1_continuum_only();
+    std::cout << "[Stage 2] Fitting Continuum + v_rad …\n"; stage2_continuum_vrad();
+    std::cout << "[Stage 3] First Full Fit …\n";        stage3_full();
+    std::cout << "[Stage 4] Iterative Noise Rescaling and Outlier Rejection  …\n";stage4_rescale_and_reject();
+    std::cout << "[Stage 5] Final Fit …\n";       stage5_final();
     final_uncertainties_ = summary_.param_uncertainties;   // 
 
     /* update model structure with the final parameter values */
@@ -405,22 +466,6 @@ Vector UnifiedFitWorkflow::get_model_for_dataset(size_t dataset_idx) const {
     
     // Apply continuum
     return model.cwiseProduct(continuum);
-}
-
-void UnifiedFitWorkflow::update_dataset_sigmas() {
-    for (size_t d = 0; d < datasets_.size(); ++d) {
-        Vector model      = get_model_for_dataset(d);
-        Vector residuals  = (model - datasets_[d].obs.flux)
-                            .cwiseQuotient(datasets_[d].obs.sigma);
-
-        for (int i = 0; i < residuals.size(); ++i) {
-            if (std::abs(residuals[i]) > 10.0 && datasets_[d].obs.ignoreflag[i]) {
-                datasets_[d].obs.ignoreflag[i] = 0;         // flag as “bad”
-                if (i < datasets_[d].keep.size())           // keep old plotting support
-                    datasets_[d].keep[i] = 0;
-            }
-        }
-    }
 }
 
 } // namespace specfit

@@ -53,6 +53,23 @@ Vector linear_interpolate(const Vector& x_new,
     return y_new;
 }
 
+inline double median(Vector v)               // pass *by value*  → cheap copy
+{
+    const Eigen::Index n = v.size();
+    if (n == 0)
+        throw std::runtime_error("median(): empty vector");
+
+    Eigen::Index k = n / 2;
+    std::nth_element(v.data(), v.data() + k, v.data() + n);   // k-th element
+
+    double m = v[k];
+    if ((n & 1) == 0) {                                       // even length
+        const double max_lo = *std::max_element(v.data(), v.data() + k);
+        m = 0.5 * (m + max_lo);
+    }
+    return m;
+}
+
 // ----------------------------------------------------------------------------
 //  Read an ASCII table with N columns of doubles, skip comment lines
 // ----------------------------------------------------------------------------
@@ -164,6 +181,16 @@ Spectrum load_ascii_2col(const std::string& path)
 
     Vector sigma = linear_interpolate(lambda, x_old, y_old);
 
+
+    // -------------------- 4. normalise by the median ----------------------------------
+    const double med = median(flux);
+    if (!std::isfinite(med) || std::abs(med) == 0.0)
+        throw std::runtime_error("load_ascii_2col: invalid flux median");
+
+    flux  .array() /= med;
+    sigma .array() /= med;
+
+
     return Spectrum{lambda, flux, sigma};
 }
 
@@ -176,6 +203,14 @@ Spectrum load_ascii_3col(const std::string& path)
     // -------------------- 2. move & sort ----------------------------------------------
     Vector lambda, flux, sigma;
     to_eigen<3>(rows, lambda, flux, &sigma);
+
+    // -------------------- 3. normalise by the median ----------------------------------
+    const double med = median(flux);
+    if (!std::isfinite(med) || std::abs(med) == 0.0)
+        throw std::runtime_error("load_ascii_3col: invalid flux median");
+
+    flux .array() /= med;
+    sigma.array() /= med;
 
     return Spectrum{lambda, flux, sigma};
 }

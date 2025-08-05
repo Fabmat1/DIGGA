@@ -108,8 +108,12 @@ add_library(DIGGAlib
 )
 
 target_include_directories(DIGGAlib
-    PUBLIC  include
-    PRIVATE extern)
+    PUBLIC  
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE 
+        extern)
+
 
 # Tell Eigen to delegate to external BLAS / LAPACK
 target_compile_definitions(DIGGAlib PUBLIC

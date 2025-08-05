@@ -116,6 +116,7 @@ void MultiDatasetCost::compute_residuals(const Eigen::VectorXd& p,
         }
         if (w_sum > 0.0) synth.array() /= w_sum;
 
+
         /* ---- χ residuals  (skip ignored points) ------------------- */
         for (int i = 0; i < np; ++i) {
             if (!ds.ignoreflag[i]) continue;
