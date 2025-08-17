@@ -13,10 +13,8 @@
 #include <vector>
 
 namespace specfit {
-namespace {          // helpers with internal linkage
-// ============================================================================
-//  Simple linear interpolation (x_old must be strictly increasing).
-// ============================================================================
+namespace {
+
 Vector linear_interpolate(const Vector& x_new,
                           const Vector& x_old,
                           const Vector& y_old)

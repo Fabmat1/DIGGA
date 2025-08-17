@@ -24,9 +24,19 @@ Vector build_nyquist_grid(double lambda_min,
         if (next <= lam)   // step too small – push to next representable double
             next = std::nextafter(lam, std::numeric_limits<Real>::infinity());
     
+        // Stop if next step would overshoot significantly
+        if (next > lambda_max && (next - lambda_max) > 0.5 * dlam) {
+            break;
+        }
+        
         lam = next;
     }
-    grid.push_back(lambda_max);
+    
+    // Only add lambda_max if it's not too close to the last point
+    if (grid.empty() || (lambda_max - grid.back()) > 1e-10 * grid.back()) {
+        grid.push_back(lambda_max);
+    }
+    
     /* remove any accidental duplicates that may still be present       */
     grid.erase(std::unique(grid.begin(), grid.end(),
                            [&](Real a, Real b) { return std::abs(a - b) <= eps * a; }),

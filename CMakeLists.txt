@@ -222,3 +222,21 @@ install(EXPORT DIGGATargets
         FILE       DIGGATargets.cmake
         NAMESPACE  specfit::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/DIGGA)
+
+# ---------------------------------------------------------------------------
+# 10. Mock Data Generator executable ----------------------------------------
+# ---------------------------------------------------------------------------
+add_executable(mock_data_generator src/mock_data_generator.cpp)
+
+target_link_libraries(mock_data_generator PRIVATE
+    DIGGAlib
+    cxxopts::cxxopts
+)
+
+# Copy to build directory
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/global_settings.json
+               ${CMAKE_CURRENT_BINARY_DIR}/global_settings.json COPYONLY)
+
+# Installation
+install(TARGETS mock_data_generator
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

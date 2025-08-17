@@ -28,10 +28,18 @@ static Vector make_edges(const Vector& centres)
     const int N = centres.size();
     Vector edges(N + 1);
 
-    edges[0]     = centres[0] - 0.5 * (centres[1] - centres[0]);
+    // Use symmetric spacing for first and last edges
+    edges[0] = centres[0] - 0.5 * (centres[1] - centres[0]);
     for (int i = 1; i < N; ++i)
         edges[i] = 0.5 * (centres[i - 1] + centres[i]);
-    edges[N]     = centres[N - 1] + 0.5 * (centres[N - 1] - centres[N - 2]);
+    edges[N] = centres[N - 1] + 0.5 * (centres[N - 1] - centres[N - 2]);
+    
+    // Ensure edges are monotonic and don't create negative widths
+    for (int i = 1; i <= N; ++i) {
+        if (edges[i] <= edges[i-1]) {
+            edges[i] = edges[i-1] + 1e-10;  // small epsilon
+        }
+    }
 
     return edges;
 }
@@ -87,17 +95,25 @@ Vector trapezoidal_rebin(const Vector& lam_in,
     /* ---- rebin by evaluating the integral at the edges ---- */
     Vector out(lam_out.size());
     for (int i = 0; i < lam_out.size(); ++i) {
-        const double lo = out_edges[i];
-        const double hi = out_edges[i + 1];
+        // Clamp edges to input data range
+        const double lo = std::max(out_edges[i], lam_in[0]);
+        const double hi = std::min(out_edges[i + 1], lam_in[lam_in.size()-1]);
 
-        const double area = integral_at(hi) - integral_at(lo);
-        double w = hi - lo;
-        out[i] = (w > 0.0) ? area / w
-                           : flux_in[std::min<std::ptrdiff_t>(
-                                       lam_in.size() - 1,
-                                       std::lower_bound(lam_in.data(),
-                                                        lam_in.data()+lam_in.size(), lo)
-                                     - lam_in.data())];
+        if (hi <= lo) {
+            // Output bin is completely outside input range
+            // Use nearest neighbor extrapolation
+            if (out_edges[i + 1] < lam_in[0]) {
+                out[i] = flux_in[0];
+            } else if (out_edges[i] > lam_in[lam_in.size()-1]) {
+                out[i] = flux_in[flux_in.size()-1];
+            } else {
+                out[i] = interp(lam_in, flux_in, lam_out[i]);
+            }
+        } else {
+            const double area = integral_at(hi) - integral_at(lo);
+            const double w = hi - lo;
+            out[i] = area / w;
+        }
     }
     return out;
 }
