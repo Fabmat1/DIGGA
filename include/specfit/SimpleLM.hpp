@@ -67,6 +67,7 @@ levenberg_marquardt(Functor&&                    func,
     int n_free = 0;
     build_free_index(free_mask, col_index, n_free);
     if (n_free == 0) {                            // nothing to fit
+        std::cout << "[LM]  Warning: All parameters are frozen! There is nothing to fit..." << std::endl;
         summ.converged  = true;
         summ.final_chi2 = 0.0;
         return summ;
@@ -92,11 +93,17 @@ levenberg_marquardt(Functor&&                    func,
     double gmax0       = g0.cwiseAbs().maxCoeff();
     const double eps   = std::numeric_limits<double>::epsilon();
 
-    if (opt.gradient_tolerance <= 0.0)
-        opt.gradient_tolerance = 1e-4 * std::max(1.0, gmax0);
+    if (opt.gradient_tolerance <= 0.0) {
+        /* derive it from the actual gradient, guard against gmax0 == 0 */
+        if (gmax0 > 0.0)
+            opt.gradient_tolerance = 1e-4 * gmax0;          // 1e-4 × |∇χ²|ₘₐₓ
+        else
+            opt.gradient_tolerance = 1e-12;                 // tiny fallback
+    }
 
+    double xnorm = x.lpNorm<Eigen::Infinity>();
     if (opt.step_tolerance <= 0.0)
-        opt.step_tolerance = 1e-6 * (1.0 + x.lpNorm<Eigen::Infinity>());
+        opt.step_tolerance = 1e-8 * std::max(1.0, xnorm);
 
     if (opt.chi2_tolerance  <= 0.0)
         opt.chi2_tolerance  = 1e-8 * std::max(1.0, chi2);
@@ -118,6 +125,9 @@ levenberg_marquardt(Functor&&                    func,
     Eigen::VectorXd dx_free( n_free );
     Eigen::VectorXd dx    ( n );
 
+    if (opt.verbose)
+        std::cout << "[LM]  Entering iteration loop..." << std::endl;
+
     /* --------------------------------------------------------------- */
     /*  main iteration loop                                            */
     /* --------------------------------------------------------------- */
@@ -134,6 +144,10 @@ levenberg_marquardt(Functor&&                    func,
         g.noalias() = Jf.transpose() * r;
         double gmax = g.cwiseAbs().maxCoeff();
         if (gmax < opt.gradient_tolerance) {       // gradient small
+            if (summ.iterations == 1) {            // happens immediately
+                std::cout << "[LM]  Warning: gradient tolerance may be too large – "
+                             "solver stopped without iterating\n";
+            }
             summ.converged = true;
             break;
         }
@@ -152,8 +166,10 @@ levenberg_marquardt(Functor&&                    func,
 
         dx_free = -JTJ.ldlt().solve(g);            // SPD solve
 
-        if (dx_free.hasNaN() || !dx_free.allFinite())   // numerical failure
+        if (dx_free.hasNaN() || !dx_free.allFinite()){   // numerical failure
+            std::cout << "[LM]  Warning: numerical failure! Inf/NaN in solver. Aborting iteration...\n";
             break;
+        }
 
         /* --------------- copy step into full parameter vector ------- */
         dx.setZero();
@@ -163,8 +179,15 @@ levenberg_marquardt(Functor&&                    func,
         }
 
         if (dx.cwiseAbs().maxCoeff() < opt.step_tolerance) {
-            summ.converged = true;
-            break;
+            if (summ.iterations == 1) {
+                std::cout << "[LM]  Warning: step tolerance too large – "
+                             "tightening it once.\n";
+                opt.step_tolerance *= 0.01;    // tighten and try again
+            }
+            else {
+                summ.converged = true;         // later: genuine convergence
+                break;
+            }
         }
 
         /* --------------------- candidate point ---------------------- */
