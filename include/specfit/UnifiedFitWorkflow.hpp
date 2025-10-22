@@ -51,11 +51,12 @@ public:
 
 private:
     void solve_stage(const std::set<std::string>& free_params,
-                     int                          max_iterations);
+                     int                          max_iterations,
+                     bool                         add_powell = false);
 
     void stage1_continuum_only();
     void stage2_continuum_vrad();
-    void stage3_full();
+    void stage3_full(bool add_powell = false);
     void stage4_rescale_and_reject();
     void stage5_final();
 
