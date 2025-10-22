@@ -1,6 +1,7 @@
 #include "specfit/UnifiedFitWorkflow.hpp"
 #include "specfit/MultiDatasetCost.hpp"
 #include "specfit/SimpleLM.hpp"
+#include "specfit/Powell.hpp"
 #include "specfit/ReportUtils.hpp"
 #include <filesystem>
 #include <iostream>
@@ -17,7 +18,7 @@ using Eigen::ArrayXd;
 namespace specfit {
 
 /* ------------------------------------------------------------------------- */
-/*  constructor – unchanged (only removed any Ceres include)                 */
+/*  constructor                                                              */
 /* ------------------------------------------------------------------------- */
 UnifiedFitWorkflow::UnifiedFitWorkflow(
         std::vector<DataSet>& datasets,
@@ -32,7 +33,7 @@ UnifiedFitWorkflow::UnifiedFitWorkflow(
     , nthreads_(nthreads)
 {
     /* ================================================================ */
-    /*  0.  build stellar-parameter indexer                            */
+    /*  0.  build stellar-parameter indexer                             */
     /* ================================================================ */
     const int n_components = static_cast<int>(model_.params.size());
     const int n_datasets   = static_cast<int>(datasets_.size());
@@ -63,7 +64,8 @@ UnifiedFitWorkflow::UnifiedFitWorkflow(
 /*  helper that performs one optimisation stage                              */
 /* ------------------------------------------------------------------------- */
 void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
-                                     int max_iterations)
+                                     int max_iterations,
+                                     bool add_powell)
 {
     /* ---- a) gather bookkeeping info ----------------------------------- */
     static int dbg_stage_counter = 0;
@@ -158,22 +160,48 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
     /* ---- d)   run Levenberg–Marquardt -------------------------------- */
     Eigen::VectorXd x = Eigen::Map<Eigen::VectorXd>(unified_params_.data(), Npar);
 
-    LMSolverOptions opt;
-    opt.max_iterations = max_iterations;
-    opt.verbose        = config_.verbose;
-
+    LMSolverOptions lm_opt;
+    lm_opt.max_iterations = max_iterations;
+    lm_opt.verbose        = config_.verbose;
 
     summary_ = levenberg_marquardt(
-                   [&cost](const Eigen::VectorXd& p,
-                           Eigen::VectorXd*       r,
-                           Eigen::MatrixXd*       J)
-                   { cost(p, r, J); },
-                   x, free_mask, lo, hi, opt,
-                   &lm_mem_);          // <── new argument
-    last_free_mask_ = free_mask;                            
+            [&cost](const Eigen::VectorXd& p,
+                    Eigen::VectorXd*       r,
+                    Eigen::MatrixXd*       J)
+            { cost(p, r, J); },
+            x, free_mask, lo, hi, lm_opt);
+    
+    last_free_mask_ = free_mask;
 
+    if (add_powell){
+        /* ---- e)   refine with Powell's method ----------------------------- */
+        PowellSolverOptions powell_opt;
+        //powell_opt.max_iterations     = std::max(50, max_iterations / 4);  // Fewer iterations for Powell
+        //powell_opt.max_function_evals = max_iterations * 2;
+        powell_opt.relative_tolerance = 1e-5;
+        powell_opt.absolute_tolerance = 1e-10;
+        powell_opt.verbose            = config_.verbose;
+
+
+        PowellSolverSummary powell_summary = powell(
+                [&cost](const Eigen::VectorXd& p,
+                        Eigen::VectorXd*       r,
+                        Eigen::MatrixXd*       J)
+                { cost(p, r, J); },
+                x, free_mask, lo, hi, powell_opt);
+
+
+        /* ---- f)   update summary with combined results -------------------- */
+        // Keep LM's parameter uncertainties, but update chi2 if Powell improved
+        if (powell_summary.final_value < summary_.final_chi2) {
+            summary_.final_chi2 = powell_summary.final_value;
+            summary_.converged = summary_.converged || powell_summary.converged;
+            summary_.iterations += powell_summary.iterations;
+        }
+    }
 
     Eigen::Map<Eigen::VectorXd>(unified_params_.data(), Npar) = x;
+    
     /* -------------------------  debug plots  ------------------------- */
     if (config_.debug_plots) {
         namespace fs = std::filesystem;
@@ -208,9 +236,9 @@ void UnifiedFitWorkflow::stage2_continuum_vrad() {
     solve_stage(fp, 100);
 }
 
-void UnifiedFitWorkflow::stage3_full() {
+void UnifiedFitWorkflow::stage3_full(bool add_powell) {
     std::set<std::string> fp = { "all", "continuum" };
-    solve_stage(fp, 200);
+    solve_stage(fp, 200, add_powell);
 }
 
 
