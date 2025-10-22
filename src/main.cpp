@@ -84,6 +84,8 @@ int main(int argc, char** argv) {
             ("threads", "Number of threads", cxxopts::value<int>()->default_value("0"))
             ("cache-size", "Maximum number of cache entries", cxxopts::value<int>()->default_value("100"))
             ("debug-plots", "Enable debug plotting output")
+            ("no-plots",   "Skip creation of per-spectrum plots")     //  <-- NEW
+            ("no-pdf",     "Do not run pdflatex on the result .tex")   //  <-- NEW
             ("h,help", "Show help");
         
         auto cli = opts.parse(argc, argv);
@@ -267,6 +269,8 @@ int main(int argc, char** argv) {
         /* generic flags the CLI already sets                                  */
         workflow_config.verbose     = true;
         workflow_config.debug_plots = cli.count("debug-plots") > 0;
+        const bool make_plots = cli.count("no-plots")==0;   // true → produce plots
+        const bool make_pdf   = cli.count("no-pdf"  )==0;   // true → run pdflatex
 
         /* ------------------------------------------------------------------ */
         /*  read optional tuning parameters from global_config.json            */
@@ -311,7 +315,9 @@ int main(int argc, char** argv) {
                          model,
                          xrange,
                          /*grey=*/true,
-                         untied_params);
+                         untied_params,
+                         make_plots, 
+                         make_pdf); 
 
         std::cout << "\nFit completed successfully!\n";
         

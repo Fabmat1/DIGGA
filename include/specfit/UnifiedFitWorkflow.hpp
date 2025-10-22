@@ -62,6 +62,8 @@ private:
     double chi2_current() const;      //  <──  new
 
 private:
+
+    LMWorkspace lm_mem_;   // lives as long as the workflow lives
     std::vector<DataSet>& datasets_;
     SharedModel&          model_;
     Config                config_;

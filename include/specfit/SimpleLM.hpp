@@ -46,16 +46,54 @@ void build_free_index(const std::vector<bool>& mask,
     }
 }
 
+struct LMWorkspace
+{
+    Eigen::MatrixXd Jf;
+    Eigen::MatrixXd JTJ;
+    Eigen::VectorXd diag_JTJ;
+    Eigen::VectorXd g;
+    Eigen::VectorXd dx_free;
+    Eigen::VectorXd dx;
+
+    void resize(std::ptrdiff_t m,
+                std::ptrdiff_t n_free,
+                std::ptrdiff_t n_full)
+    {
+        /* grow when necessary … */
+        if (Jf.rows()  < m      || Jf.cols()  < n_free)
+            Jf.resize  (std::max<std::ptrdiff_t>(Jf.rows(),  m),
+                        std::max<std::ptrdiff_t>(Jf.cols(), n_free));
+
+        if (JTJ.rows() < n_free || JTJ.cols() < n_free)
+            JTJ.resize (n_free, n_free);            // square, so grow once
+
+        if (diag_JTJ.size() < n_free) diag_JTJ.resize(n_free);
+        if (g.size()        < n_free) g.resize       (n_free);
+        if (dx_free.size()  < n_free) dx_free.resize (n_free);
+        if (dx.size()       < n_full) dx.resize      (n_full);
+
+        /* … and then shrink logically to the exact size that is
+           required for the *current* problem instance (no re-alloc): */
+        Jf.conservativeResize (m, n_free);
+        JTJ.conservativeResize(n_free, n_free);
+        diag_JTJ.conservativeResize(n_free);
+        g.conservativeResize       (n_free);
+        dx_free.conservativeResize (n_free);
+        dx.conservativeResize      (n_full);
+    }
+};
+
 /* -------------------  Levenberg–Marquardt driver routine  ------------------ */
 
 template<typename Functor>
 LMSolverSummary
 levenberg_marquardt(Functor&&                    func,
-                    Eigen::VectorXd&             x,          // in/out (full)
-                    const std::vector<bool>&     free_mask,  // same size as x
+                    Eigen::VectorXd&             x,
+                    const std::vector<bool>&     free_mask,
                     const std::vector<double>&   lower,
                     const std::vector<double>&   upper,
-                    const LMSolverOptions&       user_opt = {})
+                    const LMSolverOptions&       user_opt = {},
+                    LMWorkspace*                 work      = nullptr)
 {
     LMSolverSummary summ;
     const int n = static_cast<int>(x.size());
@@ -118,12 +156,27 @@ levenberg_marquardt(Functor&&                    func,
     /* --------------------------------------------------------------- */
     /*  one-time allocations                                           */
     /* --------------------------------------------------------------- */
-    Eigen::MatrixXd Jf( m, n_free );               // reduced Jacobian
-    Eigen::MatrixXd JTJ( n_free, n_free );
-    Eigen::VectorXd diag_JTJ( n_free );
-    Eigen::VectorXd g     ( n_free );
-    Eigen::VectorXd dx_free( n_free );
-    Eigen::VectorXd dx    ( n );
+    Eigen::MatrixXd Jf_local, JTJ_local;
+    Eigen::VectorXd diag_local, g_local, dx_free_local, dx_local;
+
+    /* pick the storage that will actually be used */
+    Eigen::MatrixXd &Jf        = work ? work->Jf        : Jf_local;
+    Eigen::MatrixXd &JTJ       = work ? work->JTJ       : JTJ_local;
+    Eigen::VectorXd &diag_JTJ  = work ? work->diag_JTJ  : diag_local;
+    Eigen::VectorXd &g         = work ? work->g         : g_local;
+    Eigen::VectorXd &dx_free   = work ? work->dx_free   : dx_free_local;
+    Eigen::VectorXd &dx        = work ? work->dx        : dx_local;
+
+    /* make sure the arrays are big enough (may allocate once) */
+    if (work) work->resize(m, n_free, n);
+    else {                 // original behaviour
+        Jf.resize (m, n_free);
+        JTJ.resize(n_free, n_free);
+        diag_JTJ.resize(n_free);
+        g.resize(n_free);
+        dx_free.resize(n_free);
+        dx.resize(n);
+    }
 
     if (opt.verbose)
         std::cout << "[LM]  Entering iteration loop..." << std::endl;

@@ -222,7 +222,9 @@ void generate_results(const std::string&              out_dir,
                       const SharedModel&              model,
                       double                          xrange,
                       bool                            grey,
-                      const std::vector<std::string>& untied_params)
+                      const std::vector<std::string>& untied_params,
+                      bool                            make_plots,        // NEW
+                      bool                            make_pdf)          // NEW
 {
     fs::create_directories(out_dir);
     MultiPanelPlotter P(xrange, grey);
@@ -347,10 +349,13 @@ void generate_results(const std::string&              out_dir,
     }
     
     /* compile (quiet) --------------------------------------------------- */
-    std::string cmd = "pdflatex -interaction=batchmode -halt-on-error "
-                      "-output-directory=" + out_dir + " " + tex_path +
-                      " > /dev/null 2>&1";
-    std::system(cmd.c_str());
+    if (make_pdf)
+    {
+        std::string cmd = "pdflatex -interaction=batchmode -halt-on-error "
+                          "-output-directory=" + out_dir + " " + tex_path +
+                          " > /dev/null 2>&1";
+        std::system(cmd.c_str());
+    }
     
     /* ---------------------------  (4) CSV ------------------------------*/
     {
@@ -377,27 +382,29 @@ void generate_results(const std::string&              out_dir,
     }
 
     /* (C) spectrum summary plots */
-    for (std::size_t d = 0; d < datasets.size(); ++d) {
-        Vector mdl = wf.get_model_for_dataset(d);    // continuum-free synthetic
-        /* recompute correct continuum offset --------------------------- */
-        int total_cont = 0;
-        for (const auto& ds : datasets) total_cont += ds.cont_y.size();
-        const int cont_block_start =
-            static_cast<int>(all_p.size()) - total_cont;
-        
-        int cs = 0;
-        for (std::size_t j = 0; j < d; ++j) cs += datasets[j].cont_y.size();
-        cs += cont_block_start;
-        Eigen::Map<const Vector> cy(all_p.data() + cs, datasets[d].cont_y.size());
-        Vector cont = AkimaSpline(datasets[d].cont_x, cy)(datasets[d].obs.lambda);
+    if (make_plots){
+        for (std::size_t d = 0; d < datasets.size(); ++d) {
+            Vector mdl = wf.get_model_for_dataset(d);    // continuum-free synthetic
+            /* recompute correct continuum offset --------------------------- */
+            int total_cont = 0;
+            for (const auto& ds : datasets) total_cont += ds.cont_y.size();
+            const int cont_block_start =
+                static_cast<int>(all_p.size()) - total_cont;
+            
+            int cs = 0;
+            for (std::size_t j = 0; j < d; ++j) cs += datasets[j].cont_y.size();
+            cs += cont_block_start;
+            Eigen::Map<const Vector> cy(all_p.data() + cs, datasets[d].cont_y.size());
+            Vector cont = AkimaSpline(datasets[d].cont_x, cy)(datasets[d].obs.lambda);
 
-        std::string pdf = out_dir + "/" +
-                          fs::path(datasets[d].name).stem().string() + ".pdf";
+            std::string pdf = out_dir + "/" +
+                              fs::path(datasets[d].name).stem().string() + ".pdf";
 
-        P.plot(pdf,
-               datasets[d].obs,         /* whole Spectrum ------------------- */
-               mdl,
-               cont);                   /* keep / ignore now inside Spectrum */
+            P.plot(pdf,
+                   datasets[d].obs,         /* whole Spectrum ------------------- */
+                   mdl,
+                   cont);                   /* keep / ignore now inside Spectrum */
+        }
     }
 }
 

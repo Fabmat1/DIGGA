@@ -50,7 +50,7 @@ find_package(CUDAToolkit QUIET)
 # ---------------------------------------------------------------------------
 # 4. Dependencies
 # ---------------------------------------------------------------------------
-find_package(Eigen3        3.4 REQUIRED)
+find_package(Eigen3        REQUIRED)
 find_package(OpenMP        COMPONENTS C CXX Fortran)   # “REQUIRED” later
 find_package(OpenBLAS      REQUIRED)
 find_package(Boost         1.72 REQUIRED COMPONENTS system filesystem)

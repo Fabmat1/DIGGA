@@ -164,11 +164,12 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
 
 
     summary_ = levenberg_marquardt(
-            [&cost](const Eigen::VectorXd& p,
-                    Eigen::VectorXd*       r,
-                    Eigen::MatrixXd*       J)
-            { cost(p, r, J); },
-            x, free_mask, lo, hi, opt);
+                   [&cost](const Eigen::VectorXd& p,
+                           Eigen::VectorXd*       r,
+                           Eigen::MatrixXd*       J)
+                   { cost(p, r, J); },
+                   x, free_mask, lo, hi, opt,
+                   &lm_mem_);          // <── new argument
     last_free_mask_ = free_mask;                            
 
 

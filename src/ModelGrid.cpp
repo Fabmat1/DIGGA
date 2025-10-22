@@ -1,5 +1,6 @@
 #include "specfit/ModelGrid.hpp"
 #include "specfit/Resolution.hpp"
+#include "specfit/RotationalConvolution.hpp"  // Added include
 #include "specfit/SpectrumCache.hpp"
 
 #include <CCfits/CCfits>
@@ -25,7 +26,7 @@ static std::string fmt(double v, int prec)
 }
 static double to_linear(const std::string& ax, double v) { return v; }
 
-/* ---------- hashing helpers for (path,resOffset,resSlope) ---------- */
+/* ---------- hashing helpers for (path,vsini,resOffset,resSlope) ---------- */
 static std::size_t hash_combine(std::size_t seed, std::size_t v) noexcept
 {
     seed ^= v + 0x9E3779B97F4A7C15ULL + (seed << 6) + (seed >> 2);
@@ -87,7 +88,7 @@ static double param_for_axis(const std::string& n,
 
 /* =================================================================== */
 Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
-                                  double he,double xi,
+                                  double he,double xi,double vsini,
                                   double resOffset,double resSlope) const
 {
     /* ---------- build interpolation hyper-cube -------------------- */
@@ -159,6 +160,7 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
         int Xi=int(std::lround(nd.x*100));
 
         Key k = pack(Ti,Gi,Zi,Hi,Xi);
+        k = hash_combine(k, hash_double(vsini));      // Include vsini in cache key
         k = hash_combine(k, hash_double(resOffset));
         k = hash_combine(k, hash_double(resSlope));
 
@@ -178,11 +180,19 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
 
                 e.sp = SpectrumCache::instance()
                          .insert_if_absent(k,[&]{
-                             Spectrum hi = read_fits(path);
-                             Spectrum lo = hi;
-                             lo.flux = degrade_resolution(hi.lambda,hi.flux,
-                                                          resOffset,resSlope);
-                             return lo;
+                             Spectrum raw = read_fits(path);
+                              
+                             // Apply rotational broadening FIRST
+                             Vector rot_flux = rotational_broaden(raw.lambda, 
+                                                                   raw.flux, 
+                                                                   vsini);
+                             
+                             // Then apply spectral degradation
+                             Spectrum result = raw;
+                             result.flux = degrade_resolution(raw.lambda, rot_flux,
+                                                               resOffset, resSlope);
+                             
+                             return result;
                          });
             }
             e.ok = true;

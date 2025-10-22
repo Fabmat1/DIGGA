@@ -23,6 +23,7 @@ public:
                            double z,
                            double he,
                            double xi,
+                           double vsini,     // Added vsini parameter
                            double resOffset,
                            double resSlope) const;
 

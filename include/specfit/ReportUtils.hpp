@@ -55,6 +55,8 @@ void generate_results(const std::string&   out_dir,
                       const SharedModel&   model,
                       double               xrange,
                       bool                 grey,
-                      const std::vector<std::string>& untied_params);
+                      const std::vector<std::string>& untied_params,
+                      bool                            make_plots  = true,   // NEW
+                      bool                            make_pdf    = true);  // NEW
 
 } // namespace specfit

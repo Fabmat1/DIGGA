@@ -1,7 +1,8 @@
+// RotationalConvolution.cpp
 #include "specfit/RotationalConvolution.hpp"
-#include <vector>
 #include <cmath>
-#include <omp.h>
+#include <algorithm>
+#include <numeric>
 
 namespace specfit {
 
@@ -15,55 +16,183 @@ static inline double rot_profile(double x, double eps)
     return num / den;
 }
 
-/* ------------------- main interface ---------------------------------- */
-Vector rotational_broaden(const Vector& lam,
-                          const Vector& flux,
-                          double        vsini_kms,
-                          double        epsilon)
+/* ------------- Linear interpolation helper --------------------------- */
+static double linear_interp(const Vector& x, const Vector& y, double xi)
 {
-    /* ---------- trivial cases ---------------------------------------- */
+    const std::ptrdiff_t n = x.size();
+    if (n == 0) return 0.0;
+    if (n == 1) return y[0];
+    if (xi <= x[0]) return y[0];
+    if (xi >= x[n-1]) return y[n-1];
+    
+    auto it = std::lower_bound(x.begin(), x.end(), xi);
+    std::ptrdiff_t i = std::distance(x.begin(), it);
+    if (i == 0) i = 1;
+    if (i >= n) i = n - 1;
+    
+    const double t = (xi - x[i-1]) / (x[i] - x[i-1]);
+    return y[i-1] * (1.0 - t) + y[i] * t;
+}
+
+/* ------------- Kernel computation ------------------------------------ */
+static RotationalKernelCache::KernelPtr 
+compute_kernel(double vsini_kms, double epsilon, int n_kernel)
+{
+    auto kernel = std::make_shared<RotationalKernelCache::KernelData>();
+    kernel->vsini_kms = vsini_kms;
+    kernel->epsilon = epsilon;
+    kernel->n_kernel = n_kernel;
+    
+    if (n_kernel <= 0) n_kernel = 81;
+    if (n_kernel % 2 == 0) n_kernel++;
+    
+    kernel->vel_shift.resize(n_kernel);
+    kernel->vel_kernel.resize(n_kernel);
+    
+    // Create velocity grid from -vsini to +vsini
+    for (int i = 0; i < n_kernel; ++i) {
+        double x = -1.0 + 2.0 * i / (n_kernel - 1);  // -1 to +1
+        kernel->vel_shift[i] = x * vsini_kms;  // Convert to km/s
+        kernel->vel_kernel[i] = rot_profile(x, epsilon);
+    }
+    
+    // Normalize the kernel
+    double kernel_sum = kernel->vel_kernel.sum();
+    if (kernel_sum > 0) {
+        kernel->vel_kernel /= kernel_sum;
+    }
+    
+    return kernel;
+}
+
+/* ------------- Cache implementation ---------------------------------- */
+RotationalKernelCache::KernelPtr 
+RotationalKernelCache::get_or_compute(double vsini_kms, double epsilon, int n_kernel)
+{
+    if (vsini_kms <= 0.0) {
+        // Return delta function kernel for zero rotation
+        auto kernel = std::make_shared<KernelData>();
+        kernel->vsini_kms = 0.0;
+        kernel->epsilon = epsilon;
+        kernel->n_kernel = 1;
+        kernel->vel_shift = Vector::Zero(1);
+        kernel->vel_kernel = Vector::Ones(1);
+        return kernel;
+    }
+    
+    Key key{vsini_kms, epsilon, n_kernel};
+    
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = cache_.find(key);
+        if (it != cache_.end()) {
+            return it->second;  // Cache hit
+        }
+    }
+    
+    // Compute outside of lock
+    auto kernel = compute_kernel(vsini_kms, epsilon, n_kernel);
+    
+    // Store in cache
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Check again in case another thread computed it
+        auto it = cache_.find(key);
+        if (it != cache_.end()) {
+            return it->second;
+        }
+        
+        // Limit cache size (optional)
+        if (cache_.size() > 100) {  // Keep last 100 kernels
+            cache_.clear();  // Simple strategy; could use LRU instead
+        }
+        
+        cache_[key] = kernel;
+    }
+    
+    return kernel;
+}
+
+/* ------------------- Main interface with caching --------------------- */
+Vector rotational_broaden(const Vector& lam,
+                         const Vector& flux,
+                         double vsini_kms,
+                         double epsilon,
+                         int n_kernel)
+{
     const std::ptrdiff_t N = flux.size();
     if (N == 0 || vsini_kms <= 0.0) return flux;
-
-    /* ---------- mean Δλ ---------------------------------------------- */
-    double dlam_mean = 0.0; std::ptrdiff_t cnt = 0;
-    for (std::ptrdiff_t i = 1; i < N; ++i)
-        if (lam[i] > lam[i-1]) { dlam_mean += lam[i]-lam[i-1]; ++cnt; }
-    if (cnt == 0) return flux;        // identical λ → nothing to do
-    dlam_mean /= cnt;
-
-    /* ---------- kernel ------------------------------------------------ */
-    const double c_km     = 299'792.458;
-    const double dl_max   = lam.mean() * vsini_kms / c_km;   // half-width
-    int   mid             = static_cast<int>(std::ceil(dl_max / dlam_mean));
-    mid  = std::max(1, mid);
-    int   klen            = 2*mid + 1;
-
-    Vector kernel(klen);
-    for (int k = 0; k < klen; ++k) {
-        double dl = (k - mid) * dlam_mean;   // offset in Å
-        kernel[k] = rot_profile(dl / dl_max, epsilon);
-    }
-    kernel /= kernel.sum();                 // normalise once!
-
-    /* ---------- convolution via sliding dot product ------------------ */
+    
+    // Get cached kernel
+    auto kernel = RotationalKernelCache::instance()
+                    .get_or_compute(vsini_kms, epsilon, n_kernel);
+    
+    const double c_km = 299792.458;  // Speed of light in km/s
     Vector out(N);
+    
+    // For each wavelength point
     #pragma omp parallel for schedule(static)
     for (std::ptrdiff_t i = 0; i < N; ++i) {
-
-        // compute slice limits in index space
-        const std::ptrdiff_t j_lo = std::max<std::ptrdiff_t>(0, i - mid);
-        const std::ptrdiff_t j_hi = std::min<std::ptrdiff_t>(N - 1, i + mid);
-        const std::ptrdiff_t len  = j_hi - j_lo + 1;
-
-        // kernel slice that overlaps with the data slice
-        const std::ptrdiff_t k_lo = mid - (i - j_lo);
-
-        // Eigen vectorised dot product
-        out[i] = flux.segment(j_lo, len).dot(kernel.segment(k_lo, len));
+        double lam_center = lam[i];
+        double sum_weight = 0.0;
+        double sum_flux = 0.0;
+        
+        // Convert velocity shifts to wavelength shifts at this wavelength
+        for (int k = 0; k < kernel->n_kernel; ++k) {
+            double dlam = lam_center * kernel->vel_shift[k] / c_km;
+            double lam_k = lam_center + dlam;
+            
+            // Find flux at this wavelength via interpolation
+            if (lam_k >= lam[0] && lam_k <= lam[N-1]) {
+                double flux_k = linear_interp(lam, flux, lam_k);
+                sum_flux += flux_k * kernel->vel_kernel[k];
+                sum_weight += kernel->vel_kernel[k];
+            }
+        }
+        
+        out[i] = (sum_weight > 0) ? sum_flux / sum_weight : flux[i];
     }
+    
     return out;
 }
 
+/* ------------------- Version without caching (for testing) ----------- */
+Vector rotational_broaden_nocache(const Vector& lam,
+                                  const Vector& flux,
+                                  double vsini_kms,
+                                  double epsilon,
+                                  int n_kernel)
+{
+    const std::ptrdiff_t N = flux.size();
+    if (N == 0 || vsini_kms <= 0.0) return flux;
+    
+    auto kernel = compute_kernel(vsini_kms, epsilon, n_kernel);
+    
+    // ... rest is same as cached version ...
+    const double c_km = 299792.458;
+    Vector out(N);
+    
+    #pragma omp parallel for schedule(static)
+    for (std::ptrdiff_t i = 0; i < N; ++i) {
+        double lam_center = lam[i];
+        double sum_weight = 0.0;
+        double sum_flux = 0.0;
+        
+        for (int k = 0; k < kernel->n_kernel; ++k) {
+            double dlam = lam_center * kernel->vel_shift[k] / c_km;
+            double lam_k = lam_center + dlam;
+            
+            if (lam_k >= lam[0] && lam_k <= lam[N-1]) {
+                double flux_k = linear_interp(lam, flux, lam_k);
+                sum_flux += flux_k * kernel->vel_kernel[k];
+                sum_weight += kernel->vel_kernel[k];
+            }
+        }
+        
+        out[i] = (sum_weight > 0) ? sum_flux / sum_weight : flux[i];
+    }
+    
+    return out;
+}
 
 } // namespace specfit

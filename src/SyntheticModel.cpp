@@ -6,7 +6,6 @@
 #include "specfit/SpectrumCache.hpp"
 #include "specfit/Resolution.hpp"
 #include "specfit/ContinuumUtils.hpp"
-#include "specfit/RotationalConvolution.hpp"
 
 #include <ankerl/unordered_dense.h>   // hash mixing constant
 #include <cmath>
@@ -58,7 +57,7 @@ inline std::size_t make_hash_full(const StellarParams& p,
 }
 
 /* Hash for the *surface* spectrum that comes from grid.load_spectrum(...)
- * (no rotation, no RV shift, no interpolation)
+ * (includes rotation and resolution degradation)
  */
 inline std::size_t make_hash_surface(const StellarParams& p,
                                      double               resOffset,
@@ -71,6 +70,7 @@ inline std::size_t make_hash_surface(const StellarParams& p,
     hash_combine(seed, p.z);
     hash_combine(seed, p.he);
     hash_combine(seed, p.xi);
+    hash_combine(seed, p.vsini);    // Now included in surface hash
 
     hash_combine(seed, resOffset);
     hash_combine(seed, resSlope);
@@ -89,6 +89,7 @@ Spectrum compute_synthetic(const ModelGrid&    grid,
                            double               resOffset,
                            double               resSlope)
 {
+            
     /* ------------------------- FULL key ---------------------------- */
     const double      lam_min  = lambda_obs.minCoeff();
     const double      lam_max  = lambda_obs.maxCoeff();
@@ -101,33 +102,32 @@ Spectrum compute_synthetic(const ModelGrid&    grid,
     SpectrumPtr final_sp =
         SpectrumCache::instance().insert_if_absent(full_key, [&] {
 
-            /* ===== 1st-level cache (surface spectrum) ============== */
+            /* ===== 1st-level cache (surface spectrum with rotation) === */
             const std::size_t surf_key =
                 make_hash_surface(pars, resOffset, resSlope);
 
             SpectrumPtr surf_sp = SpectrumCache::instance()
                 .insert_if_absent(surf_key, [&]{
+                    // Now includes vsini for rotational broadening
                     return grid.load_spectrum(pars.teff, pars.logg,
                                                pars.z,   pars.he,
-                                               pars.xi,
+                                               pars.xi,  pars.vsini,
                                                resOffset, resSlope);
                 });
             const Spectrum& surf = *surf_sp;      // safe reference
 
-            /* ---------- fast, cheap operations -------------------- */
-            /* 1) rotational broadening (depends on vsini) */
-            Vector rot = rotational_broaden(surf.lambda, surf.flux,
-                                            pars.vsini);
-
-            /* 2) Doppler shift (depends on vrad) */
+            /* ---------- remaining operations -------------------- */
+            /* Rotational broadening is now already applied in grid.load_spectrum */
+            
+            /* 1) Doppler shift (depends on vrad) */
             constexpr double c = 299'792.458;           // km/s
             const double     factor = 1.0 + pars.vrad / c;
             Vector           lam_shift = surf.lambda * factor;
 
-            /* 3) interpolate onto observed wavelength grid */
-            Vector interp = interp_linear(lam_shift, rot, lambda_obs);
+            /* 2) interpolate onto observed wavelength grid */
+            Vector interp = interp_linear(lam_shift, surf.flux, lambda_obs);
 
-            /* 4) pack the final synthetic spectrum */
+            /* 3) pack the final synthetic spectrum */
             Spectrum out;
             out.lambda = lambda_obs;
             out.flux   = std::move(interp);
