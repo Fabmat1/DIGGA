@@ -15,11 +15,15 @@
         "autoFreezeVsini": true,
         "addTelluricModel": false,
         "figIgnore": -1,
-        "untieParams": ["vrad"],
-        "nitNoiseMax"   : 5,
-        "widthBoxPx"    : 5,
+        "untieParams": [
+            "vrad"
+        ],
+        "nitNoiseMax": 5,
+        "widthBoxPx": 5,
         "outlierSigmaLo": 3.0,
         "outlierSigmaHi": 3.0,
-        "convFraction"  : 0.9
+        "convFraction": 0.9,
+        "requireBlue": 0.0,
+        "filter_snr": 5.0
     }
 }

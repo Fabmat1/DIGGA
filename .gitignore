@@ -4,3 +4,5 @@ build-debug
 testspec.txt
 perf*
 input/676673613609807360.json
+/results
+cmake_install.cmake

@@ -103,7 +103,6 @@ add_library(DIGGAlib
     src/Chi2Utils.cpp
     src/UnifiedFitWorkflow.cpp
     src/ReportUtils.cpp
-    src/SNRHelpers.cpp
     src/SpectrumLoaders.cpp
 )
 
