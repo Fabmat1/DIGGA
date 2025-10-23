@@ -1,7 +1,6 @@
 // SpectrumLoaders.hpp
 #pragma once
 #include "specfit/Spectrum.hpp"          //  λ, flux, sigma container
-#include "specfit/SNRHelpers.hpp"          //  λ, flux, sigma container
 #include <Eigen/Dense>
 #include <functional>
 #include <iosfwd>

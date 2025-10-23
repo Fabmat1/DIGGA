@@ -1,5 +1,4 @@
 #include "specfit/SpectrumLoaders.hpp"
-#include "specfit/SNRHelpers.hpp"            // get_signal_to_noise_curve / der_snr_curve
 #include <Eigen/Dense>
 #include <algorithm>
 #include <cctype>
@@ -159,12 +158,13 @@ Spectrum load_ascii_2col(const std::string& path)
                             static_cast<int>(std::round(len / 10.0)));
     npix_box     = std::min(npix_box,
                             static_cast<int>(std::round(len / 4.0)));
+    
+    Spectrum spec_out; 
+    spec_out.lambda = lambda;
+    spec_out.flux = flux;
+    SNRCurve snr;
 
-    SNRCurveResult snr;
-    if (npix_box <= 700)
-        snr = der_snr_curve(lambda, flux, npix_box);
-    else
-        snr = get_signal_to_noise_curve(lambda, flux, npix_box);
+    snr = spec_out.estimate_snr_curve("der_snr", npix_box);
 
     // build extended table [λ₀ , λ_curve , λ_last]   similar for noise
     Vector x_old(snr.lambda.size() + 2);
@@ -178,6 +178,7 @@ Spectrum load_ascii_2col(const std::string& path)
     y_old.segment(1, snr.noise .size()) = snr.noise;
 
     Vector sigma = linear_interpolate(lambda, x_old, y_old);
+    spec_out.sigma = sigma;
 
 
     // -------------------- 4. normalise by the median ----------------------------------
@@ -189,7 +190,7 @@ Spectrum load_ascii_2col(const std::string& path)
     sigma .array() /= med;
 
 
-    return Spectrum{lambda, flux, sigma};
+    return spec_out;
 }
 
 // ----------------------------------------------------------------------------

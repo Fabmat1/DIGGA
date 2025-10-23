@@ -149,25 +149,108 @@ int main(int argc, char** argv) {
         
         // Load all datasets
         std::vector<DataSet> datasets;
+
+        // Get SNR filter threshold (0 means no filtering)
+        double filter_snr = 0.0;
+        if (global_cfg["settings"].contains("filter_snr")) {
+            filter_snr = global_cfg["settings"]["filter_snr"].get<double>();
+        }
+
+        // Get minimum wavelength requirement (optional)
+        double require_blue = -std::numeric_limits<double>::infinity();
+        if (global_cfg["settings"].contains("requireBlue")) {
+            require_blue = global_cfg["settings"]["requireBlue"].get<double>();
+        }
+
+        // Track statistics
+        int total_spectra = 0;
+        int rejected_spectra = 0;
+        std::vector<std::string> rejected_files;
+
+        if (filter_snr > 0) {
+            std::cout << "Filtering spectra with SNR < " << filter_snr << "\n";
+        }
+        if (require_blue > 0) {
+            std::cout << "Requiring minimum wavelength < " << require_blue << " Å\n";
+        }
+
         for (const auto& obs : fit_cfg["observations"]) {
             for (const auto& file_cfg : obs["files"]) {
+                total_spectra++;
+                
                 // Load spectrum
                 std::string fpath = file_cfg["filename"].get<std::string>();
                 std::string format = file_cfg["spectype"].get<std::string>();
 
                 Spectrum raw;
-
+                bool load_failed = false;
+                
                 try {
                     raw = load_spectrum(fpath, format);
                 }
                 catch (const std::exception& ex) {
                     std::cerr << "Failed to read spectrum: " << ex.what() << '\n';
+                    load_failed = true;
                 }
 
+                // Check if spectrum should be rejected
+                bool reject_spectrum = false;
+                double snr_median = 0.0;
+                double wmin = std::numeric_limits<double>::infinity();
                 
+                if (!load_failed && raw.lambda.size() > 0) {
+                    // Compute minimum wavelength
+                    wmin = raw.lambda.minCoeff();
+                    
+                    // Compute median SNR if filtering is enabled
+                    if (filter_snr > 0 || require_blue > -std::numeric_limits<double>::infinity()) {
+                        try {
+                            // Use DER_SNR method for overall SNR estimate
+                            SNRResult snr_result = raw.estimate_snr_der();
+                            snr_median = snr_result.snr;
+                            
+                            // Alternative: use windowed SNR and take median
+                            // SNRCurve curve = raw.estimate_snr_curve("der_snr", 300);
+                            // snr_median = median(curve.snr);
+                        }
+                        catch (const std::exception& ex) {
+                            std::cerr << "Warning: SNR estimation failed for " 
+                                    << fs::path(fpath).filename() << ": " << ex.what() << '\n';
+                            snr_median = 0.0;
+                        }
+                    }
+
+                    // Check rejection criteria
+                    if (filter_snr > 0 && snr_median <= filter_snr) {
+                        //std::cout << "SNR " << snr_median << " filter_snr " << filter_snr << std::endl;
+                        reject_spectrum = true;
+                    }
+                    if (require_blue > 0 && wmin >= require_blue) {
+                        //std::cout << "Min Lambda " << wmin << " Require_blue " << require_blue << std::endl;
+                        reject_spectrum = true;
+                    }
+                } else {
+                    // Failed to load or empty spectrum
+                    reject_spectrum = true;
+                    snr_median = 0.0;
+                    wmin = std::numeric_limits<double>::quiet_NaN();
+                }
+                
+                // Report and skip rejected spectra
+                if (reject_spectrum) {
+                    rejected_spectra++;
+                    rejected_files.push_back(fpath);
+                    
+                    std::cout << "Ignoring spectrum " << fs::path(fpath).filename() 
+                            << " (SNR=" << std::fixed << std::setprecision(1) << snr_median 
+                            << ", λ_min=" << std::fixed << std::setprecision(0) << wmin 
+                            << ")\n";
+                    continue;  // Skip this spectrum
+                }
+
                 /* ------------------------------------------------------------
-                 *  Per-file settings (with fall-back to the “observation” level)
-                 * ------------------------------------------------------------ */
+                *  Per-file settings (with fall-back to the "observation" level)
+                * ------------------------------------------------------------ */
                 double res_offset = file_cfg["resOffset"].get<double>();
                 double res_slope  = file_cfg["resSlope" ].get<double>();
 
@@ -181,14 +264,14 @@ int main(int argc, char** argv) {
                 rebinned.sigma = trapezoidal_rebin(raw.lambda, raw.sigma, nyquist);
 
                 assert(std::is_sorted(rebinned.lambda.data(),
-                      rebinned.lambda.data() + rebinned.lambda.size()) &&
-                      "rebinned.lambda must be sorted (ascending)");
+                    rebinned.lambda.data() + rebinned.lambda.size()) &&
+                    "rebinned.lambda must be sorted (ascending)");
 
                 std::vector<int> flags(rebinned.lambda.size(), 1);
 
                 /* ------------------------------------------------------------
-                 *  Per-file settings with fall-back to the observation level
-                 * ------------------------------------------------------------ */
+                *  Per-file settings with fall-back to the observation level
+                * ------------------------------------------------------------ */
 
                 /* --- wave-cut ------------------------------------------------ */
                 std::array<double,2> wave_cut;
@@ -238,7 +321,7 @@ int main(int argc, char** argv) {
                                                 arr[1].get<double>(),
                                                 arr[2].get<double>());
                 }
-                
+
                 
                 Vector cont_x = anchors_from_intervals(cont_intervals, rebinned);
                 Vector flux_at_anchors = interp_linear(rebinned.lambda, rebinned.flux, cont_x);
@@ -257,10 +340,20 @@ int main(int argc, char** argv) {
                 ds.keep = flags;
                 
                 datasets.push_back(ds);
-                
-                std::cout << "Loaded: " << fs::path(fpath).filename() 
-                          << " (" << rebinned.lambda.size() << " points)\n";
             }
+        }
+
+        // Final check: ensure at least one spectrum passed the filters
+        if (datasets.empty()) {
+            std::ostringstream errstr;
+            errstr << "No spectra passed the quality filters";
+            if (filter_snr > 0) {
+                errstr << " [SNR>" << filter_snr << "]";
+            }
+            if (require_blue > -std::numeric_limits<double>::infinity()) {
+                errstr << " [λ_min<" << require_blue << "]";
+            }
+            throw std::runtime_error(errstr.str());
         }
         
         UnifiedFitWorkflow::Config workflow_config;
