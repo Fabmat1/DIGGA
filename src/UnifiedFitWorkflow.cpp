@@ -3,6 +3,7 @@
 #include "specfit/MultiDatasetCost.hpp"
 #include "specfit/SimpleLM.hpp"
 #include "specfit/Powell.hpp"
+#include "specfit/BoundedLMSolver.hpp"
 #include "specfit/ReportUtils.hpp"
 #include <filesystem>
 #include <iostream>
@@ -73,11 +74,14 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
     const int n_components  = static_cast<int>(model_.params.size());
     const int stellar_total = indexer_.total_stellar_params;
 
+    const char* names[8] = {"vrad","vsini","zeta","teff",
+        "logg","xi","z","he"};
+
     std::vector<DatasetInfo> ds_infos;
     std::vector<ModelGrid*>  grid_ptrs;
     int total_residuals = 0;
     int cont_offset     = 0;
-
+    
     for (auto& ds : datasets_) {
         DatasetInfo info;
         info.lambda            = ds.obs.lambda;
@@ -107,25 +111,71 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
     /* ---- b)   build lower / upper bounds ------------------------------ */
     std::vector<double> lo(Npar, -1.0e10);
     std::vector<double> hi(Npar,  1.0e10);
-
-    const char* names[8] = { "vrad","vsini","zeta","teff",
-                             "logg","xi","z","he" };
     
-    for (int c = 0; c < n_components; ++c)
-    {
-        for (std::size_t d = 0; d < datasets_.size(); ++d)
-        {
-            for (int p = 0; p < 8; ++p)
-            {
-                int idx = indexer_.get(c,static_cast<int>(d),p);
-                switch(p){
-                    case 0: lo[idx] = -1000.0; hi[idx] = 1000.0; break; // vrad
-                    case 1: lo[idx] =     0.0; hi[idx] =  500.0; break; // vsini
-                    case 3: lo[idx] =  3000.0; hi[idx] = 50000.0;break; // teff
-                    case 4: lo[idx] =     0.0; hi[idx] =     9.0;break; // logg
-                    default: break; // others unlimited
-                }
+    // Get bounds from the first grid (assuming all grids have same bounds)
+    // If grids have different bounds, take the intersection
+    ModelGrid::ParameterBounds grid_bounds;
+    bool first_grid = true;
+    
+    for (auto& grid : model_.grids) {
+        auto bounds = grid.get_parameter_bounds();
+        if (first_grid) {
+            grid_bounds = bounds;
+            first_grid = false;
+        } else {
+            // Take intersection of bounds (most restrictive)
+            grid_bounds.teff_min = std::max(grid_bounds.teff_min, bounds.teff_min);
+            grid_bounds.teff_max = std::min(grid_bounds.teff_max, bounds.teff_max);
+            grid_bounds.logg_min = std::max(grid_bounds.logg_min, bounds.logg_min);
+            grid_bounds.logg_max = std::min(grid_bounds.logg_max, bounds.logg_max);
+            grid_bounds.z_min = std::max(grid_bounds.z_min, bounds.z_min);
+            grid_bounds.z_max = std::min(grid_bounds.z_max, bounds.z_max);
+            grid_bounds.he_min = std::max(grid_bounds.he_min, bounds.he_min);
+            grid_bounds.he_max = std::min(grid_bounds.he_max, bounds.he_max);
+            grid_bounds.xi_min = std::max(grid_bounds.xi_min, bounds.xi_min);
+            grid_bounds.xi_max = std::min(grid_bounds.xi_max, bounds.xi_max);
+        }
+    }
+    
+    // Apply grid bounds to parameter vectors
+    for (int c = 0; c < n_components; ++c) {
+        for (std::size_t d = 0; d < datasets_.size(); ++d) {
+            // vrad
+            int idx = indexer_.get(c, static_cast<int>(d), 0);
+            lo[idx] = -1000.0; hi[idx] = 1000.0;
+            
+            // vsini
+            idx = indexer_.get(c, static_cast<int>(d), 1);
+            lo[idx] = 0.0; hi[idx] = 500.0;
+            
+            // zeta (no specific bounds)
+            
+            // teff
+            idx = indexer_.get(c, static_cast<int>(d), 3);
+            lo[idx] = grid_bounds.teff_min;
+            hi[idx] = grid_bounds.teff_max;
+            
+            // logg
+            idx = indexer_.get(c, static_cast<int>(d), 4);
+            lo[idx] = grid_bounds.logg_min;
+            hi[idx] = grid_bounds.logg_max;
+            
+            // xi
+            idx = indexer_.get(c, static_cast<int>(d), 5);
+            if (grid_bounds.xi_min > -1e9) {  // If grid has xi bounds
+                lo[idx] = grid_bounds.xi_min;
+                hi[idx] = grid_bounds.xi_max;
             }
+            
+            // z (metallicity)
+            idx = indexer_.get(c, static_cast<int>(d), 6);
+            lo[idx] = grid_bounds.z_min;
+            hi[idx] = grid_bounds.z_max;
+            
+            // he
+            idx = indexer_.get(c, static_cast<int>(d), 7);
+            lo[idx] = grid_bounds.he_min;
+            hi[idx] = grid_bounds.he_max;
         }
     }
 
@@ -160,17 +210,63 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
 
     /* ---- d)   run Levenberg–Marquardt -------------------------------- */
     Eigen::VectorXd x = Eigen::Map<Eigen::VectorXd>(unified_params_.data(), Npar);
-
+    
+    // Ensure initial parameters are within bounds
+    for (int i = 0; i < Npar; ++i) {
+        x[i] = std::clamp(x[i], lo[i], hi[i]);
+    }
+    
     LMSolverOptions lm_opt;
     lm_opt.max_iterations = max_iterations;
     lm_opt.verbose        = config_.verbose;
-
-    summary_ = levenberg_marquardt(
-            [&cost](const Eigen::VectorXd& p,
-                    Eigen::VectorXd*       r,
-                    Eigen::MatrixXd*       J)
-            { cost(p, r, J); },
-            x, free_mask, lo, hi, lm_opt);
+    
+    // Create a wrapper functor for the cost function
+    auto cost_functor = [&cost](const Eigen::VectorXd& p,
+                                Eigen::VectorXd* r,
+                                Eigen::MatrixXd* J) {
+        cost(p, r, J);
+    };
+    
+    // Use the standard LM with proper bounds (the bounds now match grid exactly)
+    summary_ = levenberg_marquardt(cost_functor, x, free_mask, lo, hi, lm_opt);
+    
+    // Check for parameters at boundaries and adjust uncertainties
+    const double boundary_tol = 1e-6;
+    for (int i = 0; i < Npar; ++i) {
+        if (!free_mask[i]) continue;
+        
+        bool at_lower = (x[i] - lo[i]) < boundary_tol * std::abs(lo[i] + 1.0);
+        bool at_upper = (hi[i] - x[i]) < boundary_tol * std::abs(hi[i] + 1.0);
+        
+        if (at_lower || at_upper) {
+            // Inflate uncertainty for boundary parameters
+            summary_.param_uncertainties[i] *= 2.0;
+            
+            // Optional: Print warning
+            if (config_.verbose) {
+                int comp = -1, dataset = -1, param_type = -1;
+                // Decode which parameter this is
+                for (int c = 0; c < n_components && comp < 0; ++c) {
+                    for (int d = 0; d < static_cast<int>(datasets_.size()); ++d) {
+                        for (int p = 0; p < 8; ++p) {
+                            if (indexer_.get(c, d, p) == i) {
+                                comp = c; dataset = d; param_type = p;
+                                break;
+                            }
+                        }
+                        if (comp >= 0) break;
+                    }
+                }
+                
+                if (comp >= 0) {
+                    std::cout << "  Warning: Component " << (comp+1) 
+                             << " parameter " << names[param_type]
+                             << " at " << (at_lower ? "lower" : "upper")
+                             << " grid boundary (" << x[i] << ")\n";
+                }
+            }
+        }
+    }
     
     last_free_mask_ = free_mask;
 
@@ -477,18 +573,66 @@ void UnifiedFitWorkflow::stage6_rescale_and_reject()
 
 void UnifiedFitWorkflow::stage7_final() { stage4_full(); }
 
+
+// Add implementation:
+void UnifiedFitWorkflow::report_boundary_parameters() const {
+    // Get bounds from grids
+    ModelGrid::ParameterBounds grid_bounds;
+    if (!model_.grids.empty()) {
+        grid_bounds = model_.grids[0].get_parameter_bounds();
+    }
+    
+    const double tol = 1e-4;
+    bool any_at_boundary = false;
+    
+    std::cout << "\n=== Boundary Check ===\n";
+    
+    for (size_t c = 0; c < model_.params.size(); ++c) {
+        const auto& sp = model_.params[c];
+        
+        if (std::abs(sp.teff - grid_bounds.teff_min) < tol * grid_bounds.teff_min ||
+            std::abs(sp.teff - grid_bounds.teff_max) < tol * grid_bounds.teff_max) {
+            std::cout << "Component " << (c+1) << " Teff at grid boundary: " 
+                     << sp.teff << " K\n";
+            any_at_boundary = true;
+        }
+        
+        if (std::abs(sp.logg - grid_bounds.logg_min) < tol ||
+            std::abs(sp.logg - grid_bounds.logg_max) < tol) {
+            std::cout << "Component " << (c+1) << " log g at grid boundary: " 
+                     << sp.logg << "\n";
+            any_at_boundary = true;
+        }
+        
+        if (std::abs(sp.z - grid_bounds.z_min) < tol ||
+            std::abs(sp.z - grid_bounds.z_max) < tol) {
+            std::cout << "Component " << (c+1) << " [M/H] at grid boundary: " 
+                     << sp.z << "\n";
+            any_at_boundary = true;
+        }
+        
+        // Add checks for other parameters as needed
+    }
+    
+    if (any_at_boundary) {
+        std::cout << "\n Warning: One or more parameters are at grid boundaries.\n"
+                  << "   Consider whether the solution is physical or if a larger grid is needed.\n";
+    }
+}
+
+
 /* ------------------------------------------------------------------------- */
 /*  public “run” orchestrator                                                */
 /* ------------------------------------------------------------------------- */
 void UnifiedFitWorkflow::run()
 {
-    std::cout << "[Stage 1] Continuum Fit …\n";   stage1_continuum_only();
-    std::cout << "[Stage 2] Fitting Continuum + v_rad …\n"; stage2_continuum_vrad();
-    std::cout << "[Stage 3] Fitting Continuum + v_rad + T_eff + log(g) + [M/H] …\n"; stage3_continuum_vrad_teff_logg_z();
-    std::cout << "[Stage 4] First Full Fit …\n"; stage4_full();
-    std::cout << "[Stage 5] Auto-freeze vsini if unmeasurable …\n"; stage5_auto_freeze_vsini();  // NEW
-    std::cout << "[Stage 6] Iterative Noise Rescaling and Outlier Rejection …\n"; stage6_rescale_and_reject();  // was Stage 5
-    std::cout << "[Stage 7] Final Fit …\n"; stage7_final();  // was Stage 6
+    std::cout << "[Stage 1] Continuum Fit ...\n";   stage1_continuum_only();
+    std::cout << "[Stage 2] Fitting Continuum + v_rad ...\n"; stage2_continuum_vrad();
+    std::cout << "[Stage 3] Fitting Continuum + v_rad + T_eff + log(g) + [M/H] ...\n"; stage3_continuum_vrad_teff_logg_z();
+    std::cout << "[Stage 4] First Full Fit ...\n"; stage4_full();
+    std::cout << "[Stage 5] Auto-freeze vsini if unmeasurable ...\n"; stage5_auto_freeze_vsini();
+    std::cout << "[Stage 6] Iterative Noise Rescaling and Outlier Rejection ...\n"; stage6_rescale_and_reject();
+    std::cout << "[Stage 7] Final Fit ...\n"; stage7_final();
     final_uncertainties_ = summary_.param_uncertainties;
     
     /* update model structure with the final parameter values */

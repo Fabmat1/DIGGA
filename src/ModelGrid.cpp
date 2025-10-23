@@ -251,4 +251,38 @@ Spectrum ModelGrid::read_fits(const std::string& path) const
     return sp;
 }
 
+ModelGrid::ParameterBounds ModelGrid::get_parameter_bounds() const {
+    ParameterBounds bounds;
+    
+    for (const auto& axis : axes_) {
+        if (axis.values.size() == 0) continue;
+        
+        double min_val = axis.values.minCoeff();
+        double max_val = axis.values.maxCoeff();
+        
+        if (axis.name == "t") {
+            bounds.teff_min = min_val;
+            bounds.teff_max = max_val;
+        }
+        else if (axis.name == "g") {
+            bounds.logg_min = min_val;
+            bounds.logg_max = max_val;
+        }
+        else if (axis.name == "z") {
+            bounds.z_min = min_val;
+            bounds.z_max = max_val;
+        }
+        else if (axis.name == "HHE") {
+            bounds.he_min = min_val;
+            bounds.he_max = max_val;
+        }
+        else if (axis.name == "x") {
+            bounds.xi_min = min_val;
+            bounds.xi_max = max_val;
+        }
+    }
+    
+    return bounds;
+}
+
 } // namespace specfit

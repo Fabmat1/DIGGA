@@ -61,7 +61,8 @@ private:
     void stage5_auto_freeze_vsini();
     void stage6_rescale_and_reject();
     void stage7_final();
-
+    
+    void report_boundary_parameters() const;
     double chi2_current() const;      //  <──  new
 
 private:
