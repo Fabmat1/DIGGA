@@ -1,3 +1,4 @@
+
 #include "specfit/UnifiedFitWorkflow.hpp"
 #include "specfit/MultiDatasetCost.hpp"
 #include "specfit/SimpleLM.hpp"
@@ -236,7 +237,20 @@ void UnifiedFitWorkflow::stage2_continuum_vrad() {
     solve_stage(fp, 100);
 }
 
-void UnifiedFitWorkflow::stage3_full(bool add_powell) {
+
+void UnifiedFitWorkflow::stage3_continuum_vrad_teff_logg_z() {
+    std::set<std::string> fp = { "continuum" };
+    for (std::size_t c = 0; c < model_.params.size(); ++c) {
+        fp.insert("c"+std::to_string(c+1)+"_vrad");
+        fp.insert("c"+std::to_string(c+1)+"_teff");
+        fp.insert("c"+std::to_string(c+1)+"_logg");
+        fp.insert("c"+std::to_string(c+1)+"_z");
+    }
+    solve_stage(fp, 150);
+}
+
+
+void UnifiedFitWorkflow::stage4_full(bool add_powell) {
     std::set<std::string> fp = { "all", "continuum" };
     solve_stage(fp, 200, add_powell);
 }
@@ -256,11 +270,67 @@ double UnifiedFitWorkflow::chi2_current() const
     return chi2;
 }
 
+void UnifiedFitWorkflow::stage5_auto_freeze_vsini() 
+{
+    // Calculate vsini threshold based on spectral resolution
+    double vsini_thres = 50.0;  // Initial maximum threshold
+    
+    for (const auto& ds : datasets_) {
+        // Calculate median wavelength
+        Vector lambda_sorted = ds.obs.lambda;
+        std::sort(lambda_sorted.data(), lambda_sorted.data() + lambda_sorted.size());
+        double wave_cen = lambda_sorted[lambda_sorted.size() / 2];
+        
+        // Calculate resolution at center wavelength
+        double res_cen = ds.resOffset + wave_cen * ds.resSlope;
+        
+        // Calculate vsini threshold for this dataset (c/R/15)
+        double dataset_thres = 2.99792458e+05 / res_cen / 15.0;
+        vsini_thres = std::min(vsini_thres, dataset_thres);
+    }
+    
+    // Enforce minimum threshold of 0.5 km/s
+    vsini_thres = std::max(vsini_thres, 0.5);
+    std::cout << "vsini_thres = " << vsini_thres << std::endl;
+    
+    // Check if any component has vsini below threshold
+    bool need_to_freeze = false;
+    const int n_components = static_cast<int>(model_.params.size());
+    
+    for (int c = 0; c < n_components; ++c) {
+        double vsini = unified_params_[indexer_.get(c, 0, 1)];
+        if (vsini < vsini_thres) {
+            need_to_freeze = true;
+            break;
+        }
+    }
+    
+    if (need_to_freeze) {
+        std::cout << "[Stage 5] Freezing vsini = 0 km/s (below threshold of " 
+                  << std::fixed << std::setprecision(3) << vsini_thres 
+                  << " km/s)\n";
+        
+        // Freeze vsini for all components
+        for (int c = 0; c < n_components; ++c) {
+            frozen_status_[c]["vsini"] = true;
+            
+            // Set vsini to 0 for all datasets
+            for (size_t d = 0; d < datasets_.size(); ++d) {
+                unified_params_[indexer_.get(c, static_cast<int>(d), 1)] = 0.0;
+            }
+        }
+        
+        // Run a fit with vsini frozen
+        std::set<std::string> fp = { "all", "continuum" };
+        solve_stage(fp, 100);
+    }
+}
+
 
 /* ------------------------------------------------------------------------- */
 /*  Stage-4 : iterative noise re-scaling  +  outlier rejection (fast IRLS)   */
 /* ------------------------------------------------------------------------- */
-void UnifiedFitWorkflow::stage4_rescale_and_reject()
+void UnifiedFitWorkflow::stage6_rescale_and_reject()
 {
     const auto &P      = config_;
     const int   NDS    = static_cast<int>(datasets_.size());
@@ -405,7 +475,7 @@ void UnifiedFitWorkflow::stage4_rescale_and_reject()
         std::cout << "[IterNoise] passes: " << pass << '\n';
 }
 
-void UnifiedFitWorkflow::stage5_final() { stage3_full(); }
+void UnifiedFitWorkflow::stage7_final() { stage4_full(); }
 
 /* ------------------------------------------------------------------------- */
 /*  public “run” orchestrator                                                */
@@ -414,15 +484,15 @@ void UnifiedFitWorkflow::run()
 {
     std::cout << "[Stage 1] Continuum Fit …\n";   stage1_continuum_only();
     std::cout << "[Stage 2] Fitting Continuum + v_rad …\n"; stage2_continuum_vrad();
-    std::cout << "[Stage 3] First Full Fit …\n";        stage3_full();
-    std::cout << "[Stage 4] Iterative Noise Rescaling and Outlier Rejection  …\n";stage4_rescale_and_reject();
-    std::cout << "[Stage 5] Final Fit …\n";       stage5_final();
-    final_uncertainties_ = summary_.param_uncertainties;   // 
-
+    std::cout << "[Stage 3] Fitting Continuum + v_rad + T_eff + log(g) + [M/H] …\n"; stage3_continuum_vrad_teff_logg_z();
+    std::cout << "[Stage 4] First Full Fit …\n"; stage4_full();
+    std::cout << "[Stage 5] Auto-freeze vsini if unmeasurable …\n"; stage5_auto_freeze_vsini();  // NEW
+    std::cout << "[Stage 6] Iterative Noise Rescaling and Outlier Rejection …\n"; stage6_rescale_and_reject();  // was Stage 5
+    std::cout << "[Stage 7] Final Fit …\n"; stage7_final();  // was Stage 6
+    final_uncertainties_ = summary_.param_uncertainties;
+    
     /* update model structure with the final parameter values */
     for (std::size_t c = 0; c < model_.params.size(); ++c) {
-        /* for tied parameters the value is identical for all spectra
-           – take the first dataset as representative               */
         model_.params[c].vrad  = unified_params_[ indexer_.get(c,0,0) ];
         model_.params[c].vsini = unified_params_[ indexer_.get(c,0,1) ];
         model_.params[c].zeta  = unified_params_[ indexer_.get(c,0,2) ];

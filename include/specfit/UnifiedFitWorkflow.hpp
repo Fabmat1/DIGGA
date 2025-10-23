@@ -56,9 +56,11 @@ private:
 
     void stage1_continuum_only();
     void stage2_continuum_vrad();
-    void stage3_full(bool add_powell = false);
-    void stage4_rescale_and_reject();
-    void stage5_final();
+    void stage3_continuum_vrad_teff_logg_z();
+    void stage4_full(bool add_powell = false);
+    void stage5_auto_freeze_vsini();
+    void stage6_rescale_and_reject();
+    void stage7_final();
 
     double chi2_current() const;      //  <──  new
 
