@@ -90,7 +90,8 @@ static double param_for_axis(const std::string& n,
 Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
                                   double he,double xi,double vsini,
                                   double resOffset,double resSlope) const
-{
+{   
+    //std::cout << "[LoadSpec] Building Interpolation Hypercube." << std::endl;
     /* ---------- build interpolation hyper-cube -------------------- */
     struct Node { double t,g,z,h,x,w; };
     std::array<Node,32> nodes{}; nodes[0] = {0,0,0,0,0,1}; int nN=1;
@@ -131,6 +132,7 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
         }
         nN*=2;
     }
+    //std::cout << "[LoadSpec] Building Tiny Local Cache." << std::endl;
 
     /* ---------- tiny per-call local cache (≤32) -------------------- */
     using Key = std::uint64_t;
@@ -149,9 +151,11 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
             keys[n]=k; return ent[n++];                // new slot
         }
     } lc;
+    //std::cout << "[LoadSpec] Corner fetching." << std::endl;
 
     /* ---------- helper to fetch / cache one corner ---------------- */
     auto fetch = [&](const Node& nd)->const Spectrum& {
+        //std::cout << "[LoadSpec](fetch) Fetching..." << std::endl;
 
         int Ti=int(std::lround(nd.t));
         int Gi=int(std::lround(nd.g*100));
@@ -165,10 +169,12 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
         k = hash_combine(k, hash_double(resSlope));
 
         Entry& e = lc[k];
+        //std::cout << "[LoadSpec](fetch) Entry hashes done..." << std::endl;
         if (!e.ok) {
             if (auto sp = SpectrumCache::instance().try_get(k))
                 e.sp = std::move(sp);                           // global hit
             else {
+                //std::cout << "[LoadSpec](fetch) Cache miss, calculating." << std::endl;
                 std::ostringstream oss;
                 oss<<base_<<"/HHE"
                    <<"/Z"<<fmt(nd.z,2)
@@ -180,18 +186,27 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
 
                 e.sp = SpectrumCache::instance()
                          .insert_if_absent(k,[&]{
+                             //std::cout << "[LoadSpec](fetch) Reading .fits ." << std::endl;
                              Spectrum raw = read_fits(path);
+                             //std::cout << "[LoadSpec](fetch) Broadening." << vsini << std::endl;
                               
                              // Apply rotational broadening FIRST
-                             Vector rot_flux = rotational_broaden(raw.lambda, 
-                                                                   raw.flux, 
-                                                                   vsini);
-                             
+                             Vector rot_flux;
+                             if (vsini >= 0.1){
+                                 //std::cout << "[LoadSpec](fetch) Broadeningggg." << vsini << std::endl;
+                                 rot_flux = rotational_broaden(raw.lambda, 
+                                                                    raw.flux, 
+                                                                    vsini);
+                             }
+                             else{
+                                 rot_flux = raw.flux;
+                             }
+                             //std::cout << "[LoadSpec](fetch) Degrading resolution." << std::endl;
                              // Then apply spectral degradation
                              Spectrum result = raw;
                              result.flux = degrade_resolution(raw.lambda, rot_flux,
                                                                resOffset, resSlope);
-                             
+                             //std::cout << "[LoadSpec](fetch) returning result." << std::endl;
                              return result;
                          });
             }
@@ -199,16 +214,20 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
         }
         return *e.sp;
     };
+    //std::cout << "[LoadSpec] Interpolating Cube." << std::endl;
 
     /* ---------- weighted sum over the cube ------------------------ */
     Spectrum out; bool first=true; double wsum=0.0;
 
     for(int i=0;i<nN;++i){
+        //std::cout << "[LoadSpec] Fetching Spec." << std::endl;
         const Spectrum& sp = fetch(nodes[i]);
+        //std::cout << "[LoadSpec] Fetched." << std::endl;
         if(first){ out = sp; out.flux.setZero(); first=false; }
         out.flux += sp.flux * nodes[i].w;
         wsum     += nodes[i].w;
     }
+    //std::cout << "[LoadSpec] Done!" << std::endl;
     if(wsum>0.0) out.flux.array() /= wsum;
     return out;
 }

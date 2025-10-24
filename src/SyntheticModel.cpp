@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <functional>
 #include <utility>
+#include <iostream>
 
 namespace specfit {
 
@@ -89,7 +90,8 @@ Spectrum compute_synthetic(const ModelGrid&    grid,
                            double               resOffset,
                            double               resSlope)
 {
-            
+    //std::cout << "[CompSynth] Entering Function" << std::endl;  
+    //std::cout << "[CompSynth] Making Hash." << std::endl;               
     /* ------------------------- FULL key ---------------------------- */
     const double      lam_min  = lambda_obs.minCoeff();
     const double      lam_max  = lambda_obs.maxCoeff();
@@ -98,6 +100,7 @@ Spectrum compute_synthetic(const ModelGrid&    grid,
     const std::size_t full_key =
         make_hash_full(pars, lam_min, lam_max, lam_size, resOffset, resSlope);
 
+    //std::cout << "[CompSynth] Made Hash. Spectrum Cache." << std::endl;     
     /* ===== 2nd-level cache (final spectrum) ======================== */
     SpectrumPtr final_sp =
         SpectrumCache::instance().insert_if_absent(full_key, [&] {
@@ -115,7 +118,7 @@ Spectrum compute_synthetic(const ModelGrid&    grid,
                                                resOffset, resSlope);
                 });
             const Spectrum& surf = *surf_sp;      // safe reference
-
+            //std::cout << "[CompSynth] Got Cached Spectrum. Doppler Shift." << std::endl;   
             /* ---------- remaining operations -------------------- */
             /* Rotational broadening is now already applied in grid.load_spectrum */
             
@@ -123,10 +126,13 @@ Spectrum compute_synthetic(const ModelGrid&    grid,
             constexpr double c = 299'792.458;           // km/s
             const double     factor = 1.0 + pars.vrad / c;
             Vector           lam_shift = surf.lambda * factor;
+            
+            //std::cout << "[CompSynth] Doppler Shifted. Interpolating onto wl grid." << std::endl;   
 
             /* 2) interpolate onto observed wavelength grid */
             Vector interp = interp_linear(lam_shift, surf.flux, lambda_obs);
-
+            
+            //std::cout << "[CompSynth] Interpolated. Finishing up." << std::endl;   
             /* 3) pack the final synthetic spectrum */
             Spectrum out;
             out.lambda = lambda_obs;

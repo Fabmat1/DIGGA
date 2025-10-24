@@ -9,6 +9,7 @@
 #include <mutex>
 #include <memory>
 #include <optional>
+#include <iostream>
 #include <shared_mutex>
 
 namespace specfit {
@@ -80,12 +81,12 @@ template<typename Producer>
 SpectrumPtr SpectrumCache::insert_if_absent(std::size_t hash,
                                             Producer&&   make)
 {
-    {
+    {   
         std::unique_lock lk(mtx_);
         auto it = cache_.find(hash);
         if (it != cache_.end()) {
             touch_(it);
-            return it->second.sp;          // ① fast-path hit
+            return it->second.sp;          //  fast-path hit
         }
     }
 
@@ -104,7 +105,6 @@ SpectrumPtr SpectrumCache::insert_if_absent(std::size_t hash,
 
     auto lru_it = lru_.insert(lru_.begin(), hash);          // MRU front
     cache_.try_emplace(hash, Node{new_sp, lru_it});
-
     evict_if_needed_();
     return new_sp;
 }

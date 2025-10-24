@@ -3,7 +3,6 @@
 #include "specfit/MultiDatasetCost.hpp"
 #include "specfit/SimpleLM.hpp"
 #include "specfit/Powell.hpp"
-#include "specfit/BoundedLMSolver.hpp"
 #include "specfit/ReportUtils.hpp"
 #include <filesystem>
 #include <iostream>
@@ -218,7 +217,7 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
     
     LMSolverOptions lm_opt;
     lm_opt.max_iterations = max_iterations;
-    lm_opt.verbose        = config_.verbose;
+    lm_opt.verbose        = false;
     
     // Create a wrapper functor for the cost function
     auto cost_functor = [&cost](const Eigen::VectorXd& p,
@@ -242,28 +241,25 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
             // Inflate uncertainty for boundary parameters
             summary_.param_uncertainties[i] *= 2.0;
             
-            // Optional: Print warning
-            if (config_.verbose) {
-                int comp = -1, dataset = -1, param_type = -1;
-                // Decode which parameter this is
-                for (int c = 0; c < n_components && comp < 0; ++c) {
-                    for (int d = 0; d < static_cast<int>(datasets_.size()); ++d) {
-                        for (int p = 0; p < 8; ++p) {
-                            if (indexer_.get(c, d, p) == i) {
-                                comp = c; dataset = d; param_type = p;
-                                break;
-                            }
+            int comp = -1, dataset = -1, param_type = -1;
+            // Decode which parameter this is
+            for (int c = 0; c < n_components && comp < 0; ++c) {
+                for (int d = 0; d < static_cast<int>(datasets_.size()); ++d) {
+                    for (int p = 0; p < 8; ++p) {
+                        if (indexer_.get(c, d, p) == i) {
+                            comp = c; dataset = d; param_type = p;
+                            break;
                         }
-                        if (comp >= 0) break;
                     }
+                    if (comp >= 0) break;
                 }
-                
-                if (comp >= 0) {
-                    std::cout << "  Warning: Component " << (comp+1) 
-                             << " parameter " << names[param_type]
-                             << " at " << (at_lower ? "lower" : "upper")
-                             << " grid boundary (" << x[i] << ")\n";
-                }
+            }
+            
+            if (comp >= 0) {
+                std::cout << "  Warning: Component " << (comp+1) 
+                            << " parameter " << names[param_type]
+                            << " at " << (at_lower ? "lower" : "upper")
+                            << " grid boundary (" << x[i] << ")\n";
             }
         }
     }

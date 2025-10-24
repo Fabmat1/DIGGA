@@ -3,13 +3,14 @@
 #include <Eigen/Dense>
 #include <vector>
 #include <iostream>
+#include <iomanip>
 #include <limits>
 #include <cmath>
 
 namespace specfit {
 
 /* ---------------------------  user visible bits  --------------------------- */
-/*  A value ≤ 0 means “determine automatically”.                              */
+/*  A value ≤ 0 means "determine automatically".                              */
 
 struct LMSolverOptions {
     int    max_iterations        = 200;      // hard upper limit
@@ -97,6 +98,13 @@ levenberg_marquardt(Functor&&                    func,
 {
     LMSolverSummary summ;
     const int n = static_cast<int>(x.size());
+    LMSolverOptions opt = user_opt;               // mutable copy
+
+    if (opt.verbose){
+        std::cout << "[LM] Entered LevMarq Function" << std::endl;
+        std::cout << "[LM] Mapping parameter vector" << std::endl;
+    }
+        
 
     /* --------------------------------------------------------------- */
     /*  map full parameter vector  ->  free (variable) parameters      */
@@ -110,23 +118,31 @@ levenberg_marquardt(Functor&&                    func,
         summ.final_chi2 = 0.0;
         return summ;
     }
+
+    if (opt.verbose)
+        std::cout << "[LM] Mapped Parameter Vector. First model evaluation" << std::endl;
     
     /* --------------------------------------------------------------- */
     /*  first model evaluation                                         */
     /* --------------------------------------------------------------- */
     Eigen::VectorXd r;
     Eigen::MatrixXd J;
+    if (opt.verbose)
+            std::cout << "[LM] Function Evaluation" << std::endl;
     func(x, &r, &J);
+    if (opt.verbose)
+            std::cout << "[LM] Evaluation done." << std::endl;
 
     const std::size_t m = static_cast<std::size_t>(r.size());
     double chi2 = r.squaredNorm();
     summ.initial_chi2 = chi2;
 
+    if (opt.verbose)
+        std::cout << "[LM] Evaluated Model once. Determining initial λ and tolerances." << std::endl;
+
     /* --------------------------------------------------------------- */
     /*  automatic tolerances and initial λ                             */
     /* --------------------------------------------------------------- */
-    LMSolverOptions opt = user_opt;               // mutable copy
-
     Eigen::VectorXd g0 = J.transpose() * r;
     double gmax0       = g0.cwiseAbs().maxCoeff();
     const double eps   = std::numeric_limits<double>::epsilon();
@@ -152,6 +168,10 @@ levenberg_marquardt(Functor&&                    func,
         if (opt.initial_lambda == 0.0) opt.initial_lambda = 1e-3;
     }
     double lambda = opt.initial_lambda;
+
+    if (opt.verbose)
+        std::cout << "[LM] Determinined initial λ and tolerances. One time allocations." << std::endl;
+
 
     /* --------------------------------------------------------------- */
     /*  one-time allocations                                           */
@@ -179,7 +199,8 @@ levenberg_marquardt(Functor&&                    func,
     }
 
     if (opt.verbose)
-        std::cout << "[LM]  Entering iteration loop..." << std::endl;
+        std::cout << "[LM] One time allocations complete." << std::endl;
+    std::cout << "[LM]  Entering iteration loop..." << std::endl;
 
     /* --------------------------------------------------------------- */
     /*  main iteration loop                                            */
@@ -187,11 +208,17 @@ levenberg_marquardt(Functor&&                    func,
     for (int it = 0; it < opt.max_iterations; ++it) {
         summ.iterations = it + 1;
 
+        if (opt.verbose)
+            std::cout << "[LM] Building Reduced Jacobian." << std::endl;
+
         /* ----- build reduced Jacobian (copy only the free columns) -- */
         for (int j = 0; j < n; ++j) {
             int col = col_index[j];
             if (col >= 0) Jf.col(col).noalias() = J.col(j);
         }
+
+        if (opt.verbose)
+            std::cout << "[LM] Built Reduced Jacobian. Transposing." << std::endl;
 
         /* ---------------------- g = Jᵀ r --------------------------- */
         g.noalias() = Jf.transpose() * r;
@@ -205,6 +232,9 @@ levenberg_marquardt(Functor&&                    func,
             break;
         }
 
+        if (opt.verbose)
+            std::cout << "[LM] Transposed. Multiplying" << std::endl;
+
         /* ---------- JTJ = JᵀJ  (use rank-update, lower triangle) ---- */
         JTJ.setZero();
         JTJ.selfadjointView<Eigen::Lower>().rankUpdate(Jf.adjoint(), 1.0);
@@ -212,6 +242,9 @@ levenberg_marquardt(Functor&&                    func,
             JTJ.transpose();                       // copy to upper
 
         diag_JTJ = JTJ.diagonal();
+
+        if (opt.verbose)
+            std::cout << "[LM] Multiplied Matrices. Diagonalizing and solving." << std::endl;
 
         /* ------- (JTJ + λ D) Δx = −g   (D = diag(JTJ)) -------------- */
         JTJ.diagonal().array() +=
@@ -223,6 +256,9 @@ levenberg_marquardt(Functor&&                    func,
             std::cout << "[LM]  Warning: numerical failure! Inf/NaN in solver. Aborting iteration...\n";
             break;
         }
+
+        if (opt.verbose)
+            std::cout << "[LM] Diagonalized. Copying step." << std::endl;
 
         /* --------------- copy step into full parameter vector ------- */
         dx.setZero();
@@ -243,6 +279,9 @@ levenberg_marquardt(Functor&&                    func,
             }
         }
 
+        if (opt.verbose)
+            std::cout << "[LM] Copied step. Calculating candidate." << std::endl;
+
         /* --------------------- candidate point ---------------------- */
         Eigen::VectorXd x_try = x + dx;
 
@@ -252,12 +291,26 @@ levenberg_marquardt(Functor&&                    func,
             if (!upper.empty()) x_try[j] = std::min(x_try[j], upper[j]);
         }
 
+        /* -------- recompute dx_free based on actual step taken ------ */
+        Eigen::VectorXd dx_actual = x_try - x;
+        for (int j = 0; j < n; ++j) {
+            int col = col_index[j];
+            if (col >= 0) dx_free[col] = dx_actual[j];
+        }
+
         Eigen::VectorXd r_try;
         Eigen::MatrixXd J_try;
+        if (opt.verbose)
+            std::cout << "[LM] Function Evaluation" << std::endl;
         func(x_try, &r_try, &J_try);
+        if (opt.verbose)
+            std::cout << "[LM] Evaluation done." << std::endl;
         double chi2_try = r_try.squaredNorm();
 
-        /* ------------------- Powell’s ρ test ------------------------ */
+        if (opt.verbose)
+            std::cout << "[LM] Calculated candidate. Powell test." << std::endl;
+
+        /* ------------------- Powell's ρ test ------------------------ */
         Eigen::VectorXd tmp = lambda * (diag_JTJ.array() * dx_free.array()).matrix() - g;
         double pred_red = 0.5 * dx_free.dot(tmp);
         if (pred_red <= 0.0) pred_red = eps;
@@ -278,12 +331,11 @@ levenberg_marquardt(Functor&&                    func,
             lambda *= fac;
             lambda  = std::max(lambda, 1e-18);
 
-            if (opt.verbose)
-                std::cout << "[LM]  iter " << it
-                          << "  ρ="  << rho
-                          << "  χ²=" << chi2
-                          << "  λ="  << lambda
-                          << "  (accepted)\n";
+            std::cout << "[LM]  iter " << it
+                        << "  ρ="  << std::fixed << std::setprecision(2) << rho
+                        << "  χ²=" << std::fixed << std::setprecision(2) << chi2
+                        << "  λ="  << std::fixed << std::setprecision(2) << lambda
+                        << "  (accepted)\n";
 
             if (std::abs(pred_red) < opt.chi2_tolerance) {
                 summ.converged = true;
@@ -292,16 +344,18 @@ levenberg_marquardt(Functor&&                    func,
         } else {
             /* ------------------- rejected step --------------------- */
             lambda *= 2.0;
-            if (opt.verbose)
-                std::cout << "[LM]  iter " << it
-                          << "  ρ="  << rho
-                          << "  χ²=" << chi2_try
-                          << "  λ="  << lambda
-                          << "  (rejected)\n";
+            std::cout << "[LM]  iter " << it
+                        << "  ρ="  << std::fixed << std::setprecision(2) << rho
+                        << "  χ²=" << std::fixed << std::setprecision(2) << chi2_try
+                        << "  λ="  << std::fixed << std::setprecision(2) << lambda
+                        << "  (rejected)\n";
         }
     }
 
     summ.final_chi2 = chi2;
+
+    if (opt.verbose)
+            std::cout << "[LM] Iter complete, getting uncertainties." << std::endl;
 
     /* ---------------------  propagate uncertainties  ---------------- */
     summ.param_uncertainties.assign(n, 0.0);
@@ -330,6 +384,9 @@ levenberg_marquardt(Functor&&                    func,
                     std::sqrt(std::max(0.0, cov(col, col)));
         }
     }
+
+    if (opt.verbose)
+            std::cout << "[LM] LevMarq done." << std::endl;
     return summ;
 }
 

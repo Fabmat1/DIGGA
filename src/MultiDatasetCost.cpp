@@ -4,6 +4,7 @@
 #include <Eigen/Core>
 #include <cmath>
 #include <algorithm>
+#include <iostream>
 
 namespace specfit {
 
@@ -77,6 +78,7 @@ void MultiDatasetCost::compute_residuals(const Eigen::VectorXd& p,
 {
     r.setZero(num_residuals_);
     int row = 0;
+    //std::cout << "[CostFunc](residuals) Entering loop.";
 
     /* ---------- loop over spectra ----------------------------------- */
     for (std::size_t ds_idx = 0; ds_idx < datasets_.size(); ++ds_idx) {
@@ -84,12 +86,14 @@ void MultiDatasetCost::compute_residuals(const Eigen::VectorXd& p,
         const int   np  = static_cast<int>(ds.lambda.size());
         const int   na  = ds.cont_param_count;
 
+        //std::cout << "[CostFunc](residuals)(loop) Continuum." << std::endl;
         /* ---- continuum -------------------------------------------- */
         Eigen::Map<const Vector> cont_y(p.data() +
                                         base_cont_offset_ +
                                         ds.cont_param_offset, na);
         const Vector continuum = fast_continuum(ds.cont_basis, cont_y);
 
+        //std::cout << "[CostFunc](residuals)(loop) Synthetic spectra." << std::endl;
         /* ---- synthetic composite spectrum ------------------------- */
         Vector synth  = Vector::Zero(np);
         double w_sum  = 0.0;
@@ -116,7 +120,7 @@ void MultiDatasetCost::compute_residuals(const Eigen::VectorXd& p,
         }
         if (w_sum > 0.0) synth.array() /= w_sum;
 
-
+        //std::cout << "[CostFunc](residuals)(loop) Residuals." << std::endl;
         /* ---- χ residuals  (skip ignored points) ------------------- */
         for (int i = 0; i < np; ++i) {
             if (!ds.ignoreflag[i]) continue;
@@ -137,11 +141,14 @@ void MultiDatasetCost::operator()(const Eigen::VectorXd& parameters,
                                   Eigen::VectorXd*       residuals,
                                   Eigen::MatrixXd*       jacobians) const
 {
+    //std::cout << "[CostFunc] Beginning of Cost Function." << std::endl; 
+    //std::cout << "[CostFunc] Calculating residuals." << std::endl; 
     /* ========== residual vector ==================================== */
     if (residuals) {
         residuals->resize(num_residuals_);
         compute_residuals(parameters, *residuals);
     }
+    //std::cout << "[CostFunc] Calculated residuals. Reserving Space" << std::endl; 
 
     if (!jacobians) return;                       // user wants resid only
     jacobians->setZero(num_residuals_, n_total_params_);
@@ -156,6 +163,7 @@ void MultiDatasetCost::operator()(const Eigen::VectorXd& parameters,
     for (const auto& ds : datasets_)
         all_sigma.push_back(ds.sigma);            // cheap copy of ref
 
+        //std::cout << "[CostFunc] Reserved Space. Entering Dataset Loop." << std::endl; 
     /* ---------------------------------------------------------------
        Build synthetic spectra & keep them – we need them twice:
        (a) for analytic Jacobian columns
@@ -180,10 +188,11 @@ void MultiDatasetCost::operator()(const Eigen::VectorXd& parameters,
             sp.z     = parameters[indexer_.get(c,d,6)];
             sp.he    = parameters[indexer_.get(c,d,7)];
 
+            //std::cout << "[CostFunc] (loop)Getting Synth spectrum." << std::endl; 
             Spectrum s = compute_synthetic(*grids_[c], sp,
                                             ds.lambda,
                                             ds.resOffset, ds.resSlope);
-
+                                            //std::cout << "[CostFunc] (loop)Got Synth spectrum." << std::endl; 
             const double w = std::pow(sp.teff, 4);
             synth         += w * s.flux;
             w_sum         += w;
@@ -191,6 +200,7 @@ void MultiDatasetCost::operator()(const Eigen::VectorXd& parameters,
         if (w_sum > 0.0) synth.array() /= w_sum;
         all_synth.emplace_back(std::move(synth));
     }
+    //std::cout << "[CostFunc] Loop Done. Analytical Continuum eval." << std::endl; 
 
     /* ========== (A) analytic continuum columns ===================== */
     int row_global = 0;
@@ -229,6 +239,8 @@ void MultiDatasetCost::operator()(const Eigen::VectorXd& parameters,
                 ds.sigma[i] > 0.0)
                 ++row_global;
     }
+    //std::cout << "[CostFunc] Analytical Continuum eval done. Finite Differences. (residuals)" << std::endl; 
+
 
     /* ========== (B) FD for stellar parameters only ================= */
     const double eps_base = 1e-6;
@@ -246,6 +258,7 @@ void MultiDatasetCost::operator()(const Eigen::VectorXd& parameters,
 
         jacobians->col(j) = (r_eps - r0) / h;
     }
+    //std::cout << "[CostFunc] Finite Differences done." << std::endl;
 }
 
 } // namespace specfit
