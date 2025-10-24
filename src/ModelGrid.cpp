@@ -188,12 +188,12 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
                          .insert_if_absent(k,[&]{
                              //std::cout << "[LoadSpec](fetch) Reading .fits ." << std::endl;
                              Spectrum raw = read_fits(path);
-                             //std::cout << "[LoadSpec](fetch) Broadening." << vsini << std::endl;
+                             std::cout << "[LoadSpec](fetch) Broadening." << vsini << std::endl;
                               
                              // Apply rotational broadening FIRST
                              Vector rot_flux;
                              if (vsini >= 0.1){
-                                 //std::cout << "[LoadSpec](fetch) Broadeningggg." << vsini << std::endl;
+                                 std::cout << "[LoadSpec](fetch) Broadeningggg." << vsini << std::endl;
                                  rot_flux = rotational_broaden(raw.lambda, 
                                                                     raw.flux, 
                                                                     vsini);
@@ -201,12 +201,12 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
                              else{
                                  rot_flux = raw.flux;
                              }
-                             //std::cout << "[LoadSpec](fetch) Degrading resolution." << std::endl;
+                             std::cout << "[LoadSpec](fetch) Degrading resolution." << std::endl;
                              // Then apply spectral degradation
                              Spectrum result = raw;
                              result.flux = degrade_resolution(raw.lambda, rot_flux,
                                                                resOffset, resSlope);
-                             //std::cout << "[LoadSpec](fetch) returning result." << std::endl;
+                             std::cout << "[LoadSpec](fetch) returning result." << std::endl;
                              return result;
                          });
             }
