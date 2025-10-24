@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <numeric>
 #include <unordered_map>
+#include <list>
 #include <mutex>
+#include <cassert>
 
 namespace specfit {
 
@@ -63,9 +65,96 @@ struct GridCacheKeyHash {
     }
 };
 
-/* ------------- Global cache for wavelength-specific weights ---------- */
-static std::unordered_map<GridCacheKey, RotationalWeights, GridCacheKeyHash> g_weightCache;
-static std::mutex g_cacheMutex;
+/* ------------- LRU Cache implementation ------------------------------ */
+class LRUCache {
+private:
+    static constexpr std::size_t MAX_CACHE_SIZE = 25;
+    
+    // List to maintain LRU order (most recently used at front)
+    using KeyList = std::list<GridCacheKey>;
+    KeyList lru_list;
+    
+    // Map from key to (weights, iterator in lru_list)
+    std::unordered_map<GridCacheKey, 
+                       std::pair<RotationalWeights, KeyList::iterator>, 
+                       GridCacheKeyHash> cache_map;
+    
+    mutable std::mutex mutex;
+    
+    void move_to_front(const GridCacheKey& key, KeyList::iterator it) {
+        // Move this key to front (most recently used)
+        lru_list.splice(lru_list.begin(), lru_list, it);
+    }
+    
+    void evict_lru() {
+        // Remove least recently used (back of list)
+        if (!lru_list.empty()) {
+            auto lru_key = lru_list.back();
+            cache_map.erase(lru_key);
+            lru_list.pop_back();
+        }
+    }
+    
+public:
+    // Try to get weights from cache
+    bool get(const GridCacheKey& key, RotationalWeights& weights) {
+        std::lock_guard<std::mutex> lock(mutex);
+        
+        auto it = cache_map.find(key);
+        if (it == cache_map.end()) {
+            return false;  // Cache miss
+        }
+        
+        // Cache hit - update LRU order
+        weights = it->second.first;
+        move_to_front(key, it->second.second);
+        return true;
+    }
+    
+    // Put weights into cache
+    void put(const GridCacheKey& key, RotationalWeights weights) {
+        std::lock_guard<std::mutex> lock(mutex);
+        
+        auto it = cache_map.find(key);
+        if (it != cache_map.end()) {
+            // Key already exists - update and move to front
+            it->second.first = std::move(weights);
+            move_to_front(key, it->second.second);
+            return;
+        }
+        
+        // Check if cache is full
+        if (cache_map.size() >= MAX_CACHE_SIZE) {
+            evict_lru();
+        }
+        
+        // Insert new entry at front of LRU list
+        lru_list.push_front(key);
+        cache_map[key] = {std::move(weights), lru_list.begin()};
+    }
+    
+    // Clear all cache entries
+    void clear() {
+        std::lock_guard<std::mutex> lock(mutex);
+        cache_map.clear();
+        lru_list.clear();
+    }
+    
+    // Get current cache size
+    std::size_t size() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return cache_map.size();
+    }
+    
+    // Check if key exists (for precompute)
+    bool contains(const GridCacheKey& key) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return cache_map.find(key) != cache_map.end();
+    }
+};
+
+/* ------------- Global LRU cache -------------------------------------- */
+static LRUCache g_weightCache;
 
 /* ------------- Create cache key from wavelength grid ----------------- */
 static GridCacheKey make_grid_key(const Vector& lam, 
@@ -188,6 +277,8 @@ static RotationalWeights compute_weights(const Vector& lam,
 static Vector apply_weights(const Vector& flux, const RotationalWeights& weights)
 {
     const std::ptrdiff_t N = weights.weights_per_point.size();
+    assert(flux.size() >= N && "Flux array too small for weights!");
+
     Vector out(N);
     const double* flux_data = flux.data();
     
@@ -197,6 +288,7 @@ static Vector apply_weights(const Vector& flux, const RotationalWeights& weights
         
         // Simple dot product with precomputed weights
         for (const auto& w : weights.weights_per_point[i]) {
+            assert(w.idx < flux.size() && "Weight index out of bounds!");
             sum += w.weight * flux_data[w.idx];
         }
         
@@ -206,7 +298,7 @@ static Vector apply_weights(const Vector& flux, const RotationalWeights& weights
     return out;
 }
 
-/* ------------------- Main interface with proper caching -------------- */
+/* ------------------- Main interface with LRU caching ----------------- */
 Vector rotational_broaden(const Vector& lam,
                          const Vector& flux,
                          double vsini_kms,
@@ -214,43 +306,27 @@ Vector rotational_broaden(const Vector& lam,
                          int n_kernel)
 {
     if (lam.size() == 0 || vsini_kms <= 0.0) return flux;
+    assert(flux.size() == lam.size() && "Flux and lambda size mismatch!");
+    assert(flux.data() != nullptr && "Flux data is null!");
     
     // Create cache key including wavelength grid signature
     GridCacheKey key = make_grid_key(lam, vsini_kms, epsilon, n_kernel);
     
-    // Check cache
-    {
-        std::lock_guard<std::mutex> lock(g_cacheMutex);
-        auto it = g_weightCache.find(key);
-        if (it != g_weightCache.end()) {
-            // Cache hit! Just apply precomputed weights
-            return apply_weights(flux, it->second);
-        }
+    // Try to get from cache
+    RotationalWeights weights;
+    if (g_weightCache.get(key, weights)) {
+        // Cache hit! Just apply precomputed weights
+        return apply_weights(flux, weights);
     }
     
     // Cache miss - compute weights
-    RotationalWeights weights = compute_weights(lam, vsini_kms, epsilon, n_kernel);
+    weights = compute_weights(lam, vsini_kms, epsilon, n_kernel);
     
-    // Store in cache
-    {
-        std::lock_guard<std::mutex> lock(g_cacheMutex);
-        // Check again in case another thread computed it
-        auto it = g_weightCache.find(key);
-        if (it != g_weightCache.end()) {
-            return apply_weights(flux, it->second);
-        }
-        
-        // Optional: Limit cache size
-        if (g_weightCache.size() > 100) {
-            // Simple strategy; could implement LRU
-            g_weightCache.clear();
-        }
-        
-        g_weightCache[key] = std::move(weights);
-    }
+    // Store in cache (will handle LRU eviction if needed)
+    g_weightCache.put(key, weights);
     
     // Apply weights
-    return apply_weights(flux, g_weightCache[key]);
+    return apply_weights(flux, weights);
 }
 
 /* ------------- Optional: Precompute weights for known grids ---------- */
@@ -261,23 +337,21 @@ void precompute_rotational_weights(const Vector& lam,
 {
     GridCacheKey key = make_grid_key(lam, vsini_kms, epsilon, n_kernel);
     
-    std::lock_guard<std::mutex> lock(g_cacheMutex);
-    if (g_weightCache.find(key) == g_weightCache.end()) {
-        g_weightCache[key] = compute_weights(lam, vsini_kms, epsilon, n_kernel);
+    if (!g_weightCache.contains(key)) {
+        RotationalWeights weights = compute_weights(lam, vsini_kms, epsilon, n_kernel);
+        g_weightCache.put(key, std::move(weights));
     }
 }
 
 /* ------------- Optional: Clear cache --------------------------------- */
 void clear_rotational_cache()
 {
-    std::lock_guard<std::mutex> lock(g_cacheMutex);
     g_weightCache.clear();
 }
 
 /* ------------- Optional: Get cache statistics ------------------------ */
 std::size_t get_rotational_cache_size()
 {
-    std::lock_guard<std::mutex> lock(g_cacheMutex);
     return g_weightCache.size();
 }
 

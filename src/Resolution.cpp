@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <vector>
 #include <tuple>
+#include <list>
 
 #ifdef _OPENMP
   #include <omp.h>
@@ -58,7 +59,29 @@ struct CacheKeyHash {
 
 // Global cache (thread-safe for reads after initial computation)
 static std::unordered_map<CacheKey, std::vector<WeightSegment>, CacheKeyHash> g_weightCache;
+static std::list<CacheKey> g_lruList;
 static std::mutex g_cacheMutex;
+static constexpr std::size_t MAX_CACHE_SIZE = 25;
+
+// Moves key to front (most recently used)
+static void touch_key(const CacheKey& key) {
+    // Remove any existing occurrence
+    g_lruList.remove(key);
+    g_lruList.push_front(key);
+}
+
+// Inserts key and evicts if needed
+static void insert_cache_entry(const CacheKey& key, std::vector<WeightSegment>&& value) {
+    g_weightCache.emplace(key, std::move(value));
+    g_lruList.push_front(key);
+    
+    if (g_weightCache.size() > MAX_CACHE_SIZE) {
+        const CacheKey& victim = g_lruList.back();
+        g_weightCache.erase(victim);
+        g_lruList.pop_back();
+    }
+}
+
 
 // Compute weights for a wavelength grid and resolution parameters
 std::vector<WeightSegment> compute_weights(const Vector& lam,
@@ -171,22 +194,23 @@ Vector degrade_resolution(const Vector& lam,
         std::lock_guard<std::mutex> lock(g_cacheMutex);
         auto it = g_weightCache.find(key);
         if (it != g_weightCache.end()) {
-            // Weights found in cache - just apply them!
+            touch_key(key);
             return apply_weights(flux, it->second);
         }
     }
     
-    // Compute weights (this is expensive but only done once per grid)
+    // Compute weights
     auto weights = compute_weights(lam, resOffset, resSlope);
-    
-    // Store in cache for future use
+
+    // Insert into cache with LRU enforcement
     {
         std::lock_guard<std::mutex> lock(g_cacheMutex);
-        g_weightCache[key] = std::move(weights);
+        insert_cache_entry(key, std::move(weights));
     }
-    
+
     // Apply weights
     return apply_weights(flux, g_weightCache[key]);
+
 #endif
 }
 
