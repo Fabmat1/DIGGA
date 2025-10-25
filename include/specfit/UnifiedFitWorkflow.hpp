@@ -47,6 +47,7 @@ public:
     const LMSolverSummary& get_summary() const { return summary_; }
     const std::vector<double>& get_parameters()   const { return unified_params_; }
     const std::vector<double>& get_uncertainties() const { return final_uncertainties_; }
+    const double& get_final_chi2() const { return summary_.final_chi2; }
     const std::vector<bool>& get_free_mask() const { return last_free_mask_; }
 
 private:

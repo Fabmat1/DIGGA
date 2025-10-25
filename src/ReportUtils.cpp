@@ -361,6 +361,13 @@ void generate_results(const std::string&              out_dir,
     {
         std::ofstream csv(out_dir + "/fit_parameters.csv");
         csv << "parameter,value,error\n";
+        csv << "final_chi2," << wf.get_final_chi2() << ",0.0\n"; 
+        for (auto& t : csv_entries)
+        {
+            csv << std::get<0>(t) << ','
+                << std::setprecision(10) << std::get<1>(t) << ','
+                << std::setprecision(10) << std::get<2>(t) << '\n';
+        }
         /* continuum λ anchors (error = 0) ------------------------------ */
         for (std::size_t d = 0; d < datasets.size(); ++d)
         {
@@ -372,12 +379,6 @@ void generate_results(const std::string&              out_dir,
                 csv << stem << "_contX" << a << ','
                     << std::setprecision(10) << ds.cont_x[a] << ",0\n";
             }
-        }
-        for (auto& t : csv_entries)
-        {
-            csv << std::get<0>(t) << ','
-                << std::setprecision(10) << std::get<1>(t) << ','
-                << std::setprecision(10) << std::get<2>(t) << '\n';
         }
     }
 
