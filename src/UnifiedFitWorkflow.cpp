@@ -567,10 +567,99 @@ void UnifiedFitWorkflow::stage6_rescale_and_reject()
         std::cout << "[IterNoise] passes: " << pass << '\n';
 }
 
-void UnifiedFitWorkflow::stage7_final() { stage4_full(); }
+void UnifiedFitWorkflow::stage7_final() {
+    const int n_components = static_cast<int>(model_.params.size());
+    const char* names[8] = {"vrad","vsini","zeta","teff","logg","xi","z","he"};
+    const double boundary_tol = 1e-6;
+    
+    // Get grid bounds
+    ModelGrid::ParameterBounds grid_bounds;
+    bool first_grid = true;
+    for (auto& grid : model_.grids) {
+        auto bounds = grid.get_parameter_bounds();
+        if (first_grid) {
+            grid_bounds = bounds;
+            first_grid = false;
+        } else {
+            grid_bounds.teff_min = std::max(grid_bounds.teff_min, bounds.teff_min);
+            grid_bounds.teff_max = std::min(grid_bounds.teff_max, bounds.teff_max);
+            grid_bounds.logg_min = std::max(grid_bounds.logg_min, bounds.logg_min);
+            grid_bounds.logg_max = std::min(grid_bounds.logg_max, bounds.logg_max);
+            grid_bounds.z_min = std::max(grid_bounds.z_min, bounds.z_min);
+            grid_bounds.z_max = std::min(grid_bounds.z_max, bounds.z_max);
+            grid_bounds.he_min = std::max(grid_bounds.he_min, bounds.he_min);
+            grid_bounds.he_max = std::min(grid_bounds.he_max, bounds.he_max);
+            grid_bounds.xi_min = std::max(grid_bounds.xi_min, bounds.xi_min);
+            grid_bounds.xi_max = std::min(grid_bounds.xi_max, bounds.xi_max);
+        }
+    }
+    
+    // Do initial full fit
+    std::cout << "[Stage 7] Final fit ...\n";
+    stage4_full(); 
+    
+    // Check for boundary parameters
+    bool any_at_boundary = false;
+    std::vector<std::tuple<int, int, std::string>> boundary_params;  // comp, param_idx, name
+    
+    for (int c = 0; c < n_components; ++c) {
+        // Get bounds for each parameter type
+        std::vector<std::pair<double, double>> param_bounds = {
+            {-1000.0, 1000.0},           // vrad
+            {0.0, 500.0},                // vsini
+            {-1e10, 1e10},               // zeta (no bounds)
+            {grid_bounds.teff_min, grid_bounds.teff_max},  // teff
+            {grid_bounds.logg_min, grid_bounds.logg_max},  // logg
+            {grid_bounds.xi_min, grid_bounds.xi_max},      // xi
+            {grid_bounds.z_min, grid_bounds.z_max},        // z
+            {grid_bounds.he_min, grid_bounds.he_max}       // he
+        };
+        
+        for (int p = 0; p < 8; ++p) {
+            // Skip if already frozen
+            if (frozen_status_[c].at(names[p])) continue;
+            
+            int idx = indexer_.get(c, 0, p);  // Check first dataset
+            double val = unified_params_[idx];
+            double lo = param_bounds[p].first;
+            double hi = param_bounds[p].second;
+            
+            // Check if at boundary
+            bool at_lower = (val - lo) < boundary_tol * std::abs(lo + 1.0);
+            bool at_upper = (hi - val) < boundary_tol * std::abs(hi + 1.0);
+            
+            if (at_lower || at_upper) {
+                std::cout << "  Warning: Component " << (c+1) 
+                          << " parameter " << names[p]
+                          << " at " << (at_lower ? "lower" : "upper")
+                          << " grid boundary (" << val << ")\n";
+                any_at_boundary = true;
+                boundary_params.push_back(std::make_tuple(c, p, std::string(names[p])));
+            }
+        }
+    }
+    
+    // If any parameters at boundary, freeze them and refit
+    if (any_at_boundary) {
+        std::cout << "\n[Stage 7] Detected " << boundary_params.size() 
+                  << " parameter(s) at grid boundaries.\n";
+        std::cout << "[Stage 7] Freezing boundary parameters and refitting...\n";
+        
+        // Freeze all boundary parameters
+        for (const auto& param_info : boundary_params) {
+            int comp = std::get<0>(param_info);
+            std::string param_name = std::get<2>(param_info);
+            
+            frozen_status_[comp][param_name] = true;
+            std::cout << "  Frozen: Component " << (comp+1) 
+                      << " " << param_name << "\n";
+        }
+        
+        stage4_full();  // with Powell refinement
+    }
+}    
 
 
-// Add implementation:
 void UnifiedFitWorkflow::report_boundary_parameters() const {
     // Get bounds from grids
     ModelGrid::ParameterBounds grid_bounds;
