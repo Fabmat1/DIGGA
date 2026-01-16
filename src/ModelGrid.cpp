@@ -204,9 +204,11 @@ Spectrum ModelGrid::load_spectrum(double teff,double logg,double z,
                              //std::cout << "[LoadSpec](fetch) Degrading resolution." << std::endl;
                              // Then apply spectral degradation
                              Spectrum result = raw;
+                             if (resOffset != 0 && resSlope != 0){
                              result.flux = degrade_resolution(raw.lambda, rot_flux,
                                                                resOffset, resSlope);
                                                                //std::cout << "[LoadSpec](fetch) returning result." << std::endl;
+                             }
                              return result;
                          });
             }

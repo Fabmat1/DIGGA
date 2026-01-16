@@ -21,5 +21,7 @@ Spectrum compute_synthetic(const ModelGrid& grid,
                            const Vector& lambda_obs,
                            double resOffset,
                            double resSlope);
+                           
+Spectrum compute_synthetic_pure(const ModelGrid& grid, const StellarParams& params);
 
 } // namespace specfit

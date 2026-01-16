@@ -146,4 +146,42 @@ Spectrum compute_synthetic(const ModelGrid&    grid,
     return *final_sp;
 }
 
+/* ------------------------------------------------------------------ *
+ *  compute_synthetic_pure  –– raw interpolated spectrum, no degradation
+ * ------------------------------------------------------------------ */
+Spectrum compute_synthetic_pure(const ModelGrid&     grid,
+                                const StellarParams& pars)
+{
+    /* 
+     * We want the pure interpolated spectrum without:
+     *   - Rotational broadening (vsini)
+     *   - Macroturbulence (zeta)  
+     *   - Instrumental resolution degradation
+     *   - Radial velocity shift
+     *
+     * Call load_spectrum with:
+     *   - vsini = 0 (no rotational broadening)
+     *   - resOffset = 1e9, resSlope = 0 (effectively infinite resolution = no degradation)
+     */
+    
+    constexpr double NO_VSINI     = 0.0;
+    constexpr double HIGH_RES     = 0.0;   // R ~ infinity, no instrumental broadening
+    constexpr double NO_RES_SLOPE = 0.0;
+    
+    Spectrum surf = grid.load_spectrum(
+        pars.teff,
+        pars.logg,
+        pars.z,
+        pars.he,
+        pars.xi,
+        NO_VSINI,
+        HIGH_RES,
+        NO_RES_SLOPE
+    );
+    
+    // The spectrum from load_spectrum should already be normalized
+    // Return it directly on the native wavelength grid
+    return surf;
+}
+
 } // namespace specfit

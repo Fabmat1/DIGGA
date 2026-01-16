@@ -53,7 +53,7 @@ find_package(CUDAToolkit QUIET)
 find_package(Eigen3        REQUIRED)
 find_package(OpenMP        COMPONENTS C CXX Fortran)   # “REQUIRED” later
 find_package(OpenBLAS      REQUIRED)
-find_package(Boost         1.72 REQUIRED COMPONENTS system filesystem)
+find_package(Boost         REQUIRED COMPONENTS filesystem)
 find_package(nlohmann_json REQUIRED)
 find_package(Python3       REQUIRED COMPONENTS Interpreter Development NumPy)
 find_package(TBB           REQUIRED)
@@ -125,7 +125,7 @@ target_link_libraries(DIGGAlib PUBLIC
     ${CCFITS_LIB}
     ${CFITSIO_LIB}
     nlohmann_json::nlohmann_json
-    Boost::boost Boost::system Boost::filesystem
+    Boost::boost Boost::filesystem
     Python3::Python Python3::NumPy
     TBB::tbb
     unordered_dense::unordered_dense)
