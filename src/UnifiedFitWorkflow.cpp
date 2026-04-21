@@ -3,7 +3,6 @@
 #include "specfit/MultiDatasetCost.hpp"
 #include "specfit/SimpleLM.hpp"
 #include "specfit/Powell.hpp"
-#include "specfit/ReportUtils.hpp"
 #include <filesystem>
 #include <iostream>
 #include <set>
@@ -295,23 +294,9 @@ void UnifiedFitWorkflow::solve_stage(const std::set<std::string>& free_params,
 
     Eigen::Map<Eigen::VectorXd>(unified_params_.data(), Npar) = x;
     
-    /* -------------------------  debug plots  ------------------------- */
-    if (config_.debug_plots) {
-        namespace fs = std::filesystem;
-        fs::create_directories("debug");
-
-        MultiPanelPlotter P(1.0, false);          // xrange ignored by simple_plot()
-        for (std::size_t d = 0; d < datasets_.size(); ++d) {
-            Vector mdl = get_model_for_dataset(d);
-            std::string pdf =
-                "debug/stage" + std::to_string(dbg_stage_counter) + "_" +
-                fs::path(datasets_[d].name).stem().string() + ".pdf";
-            P.simple_plot(pdf,
-                          datasets_[d].obs,
-                          mdl);
-        }
-    }
-    ++dbg_stage_counter;   
+    if (config_.on_stage_complete)
+        config_.on_stage_complete(dbg_stage_counter, *this);
+    ++dbg_stage_counter;
 }
 
 /* ------------------------------------------------------------------------- */

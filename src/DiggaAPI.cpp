@@ -181,20 +181,22 @@ FitResult DiggaSession::run()
         throw std::runtime_error("No spectra passed the quality filters");
 
     // ---- workflow config ----------------------------------------------------
-    UnifiedFitWorkflow::Config wcfg;
-    wcfg.verbose          = gs.verbose;
-    wcfg.debug_plots      = gs.debug_plots;
-    wcfg.untie_params     = gs.untie_params;
-    wcfg.nit_noise_max    = gs.nit_noise_max;
-    wcfg.nit_fit_max      = gs.nit_fit_max;
-    wcfg.width_box_px     = gs.width_box_px;
-    wcfg.outlier_sigma_lo = gs.outlier_sigma_lo;
-    wcfg.outlier_sigma_hi = gs.outlier_sigma_hi;
-    wcfg.conv_range_lo    = gs.conv_range_lo;
-    wcfg.conv_range_hi    = gs.conv_range_hi;
-    wcfg.conv_fraction    = gs.conv_fraction;
+    ::specfit::UnifiedFitWorkflow::Config wcfg;
+    wcfg.verbose           = gs.verbose;
+    wcfg.debug_plots       = gs.debug_plots;
+    wcfg.untie_params      = gs.untie_params;
+    wcfg.nit_noise_max     = gs.nit_noise_max;
+    wcfg.nit_fit_max       = gs.nit_fit_max;
+    wcfg.width_box_px      = gs.width_box_px;
+    wcfg.outlier_sigma_lo  = gs.outlier_sigma_lo;
+    wcfg.outlier_sigma_hi  = gs.outlier_sigma_hi;
+    wcfg.conv_range_lo     = gs.conv_range_lo;
+    wcfg.conv_range_hi     = gs.conv_range_hi;
+    wcfg.conv_fraction     = gs.conv_fraction;
+    wcfg.on_stage_complete = gs.on_stage_complete;
 
-    UnifiedFitWorkflow wf(datasets, model, wcfg, frozen, nt);
+
+    ::specfit::UnifiedFitWorkflow wf(datasets, model, wcfg, frozen, nt);
     if (impl_->progress) impl_->progress("fitting", 0.0);
     wf.run();
     if (impl_->progress) impl_->progress("fitting", 1.0);

@@ -17,22 +17,26 @@ class UnifiedFitWorkflow {
 public:
     struct Config
     {
-        // ---------------- previous fields ----------------
-        int    n_outlier_iterations = 3;            // kept (stage-1 stuff)
+        int    n_outlier_iterations = 3;
         bool   verbose              = true;
         bool   debug_plots          = false;
         std::tuple<double,double> chi_thresholds = {-2.0, 2.0};
-        std::vector<std::string> untie_params;      // vrad, …
+        std::vector<std::string> untie_params;
 
-        // ---------------- NEW : S-Lang iterative noise -----------------
-        int    nit_noise_max            = 5;      // outer passes
-        int    nit_fit_max              = 5;      // micro-fits per pass
-        int    width_box_px             = 5;      // neighbourhood for σ
-        double outlier_sigma_lo         = 2.0;    // −2 σ
-        double outlier_sigma_hi         = 2.0;    // +2 σ
-        double conv_range_lo            = 0.9;    // 0.9 < s < 1.1
+        int    nit_noise_max            = 5;
+        int    nit_fit_max              = 5;
+        int    width_box_px             = 5;
+        double outlier_sigma_lo         = 2.0;
+        double outlier_sigma_hi         = 2.0;
+        double conv_range_lo            = 0.9;
         double conv_range_hi            = 1.1;
-        double conv_fraction            = 0.9;    // 90 % of bins
+        double conv_fraction            = 0.9;
+
+        // Called at the end of every fitting stage if set.
+        // stage_index: 0-based counter across all solve_stage() calls.
+        // Implementation-defined usage: the CLI hooks MultiPanelPlotter here.
+        std::function<void(int stage_index,
+                        const UnifiedFitWorkflow& wf)> on_stage_complete;
     };
 
     UnifiedFitWorkflow(std::vector<DataSet>& datasets,
