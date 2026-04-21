@@ -159,6 +159,25 @@ struct MockDataConfig {
     // Additional options
     bool verbose = false;
     int num_threads = 1;
+
+    // Initial guess configuration for fitting
+    struct InitialGuess {
+        double value = 0.0;
+        bool freeze = false;
+    };
+    
+    std::map<std::string, InitialGuess> initial_guesses = {
+        {"c1_vrad",  {0.0, false}},
+        {"c1_vsini", {10.0, false}},
+        {"c1_zeta",  {0.0, true}},
+        {"c1_teff",  {25000.0, false}},
+        {"c1_logg",  {5.5, false}},
+        {"c1_xi",    {0.0, true}},
+        {"c1_z",     {0.0, true}},
+        {"c1_HE",    {-2.0, false}}
+    };
+    
+    bool use_nyquist_sampling = true;  // Add this flag
 };
 
 // Progress tracking
@@ -302,12 +321,19 @@ void generate_mock_spectrum(
     nlohmann::json& metadata
 ) {
     // Generate wavelength grid
-    Vector wave_obs = build_nyquist_grid(
-        config.wave_start, 
-        config.wave_end,
-        config.res_offset,
-        config.res_slope
-    );
+    Vector wave_obs;
+    if (config.use_nyquist_sampling) {
+        wave_obs = build_nyquist_grid(
+            config.wave_start, 
+            config.wave_end,
+            config.res_offset,
+            config.res_slope
+        );
+    } else {
+        // Linear sampling using wave_sampling
+        int n_points = static_cast<int>((config.wave_end - config.wave_start) / config.wave_sampling) + 1;
+        wave_obs = Vector::LinSpaced(n_points, config.wave_start, config.wave_end);
+    }
     
     // Generate synthetic spectrum
     Spectrum synth = compute_synthetic(
@@ -321,7 +347,7 @@ void generate_mock_spectrum(
     
     // Add Gaussian noise
     std::normal_distribution<> noise_dist(0.0, 1.0);
-    const double median_flux = median(synth.flux);  // Assumed normalized
+    const double median_flux = median(synth.flux);
     const double sigma = noise_level * median_flux;
     
     for(int i = 0; i < synth.flux.size(); ++i) {
@@ -438,16 +464,14 @@ void generation_worker(
         
         // Generate input.json for fitting
         nlohmann::json input_json;
-        input_json["initialGuess"] = {
-            {"c1_vrad", {{"value", 0.0}, {"freeze", false}}},
-            {"c1_vsini", {{"value", 10.0}, {"freeze", false}}},
-            {"c1_zeta", {{"value", 0.0}, {"freeze", true}}},
-            {"c1_teff", {{"value", 25000.0}, {"freeze", false}}},
-            {"c1_logg", {{"value", 5.5}, {"freeze", false}}},
-            {"c1_xi", {{"value", 0.0}, {"freeze", true}}},
-            {"c1_z", {{"value", 0.0}, {"freeze", true}}},
-            {"c1_HE", {{"value", -2.0}, {"freeze", false}}}
-        };
+        nlohmann::json initial_guess_json;
+        for (const auto& [key, guess] : config.initial_guesses) {
+            initial_guess_json[key] = {
+                {"value", guess.value},
+                {"freeze", guess.freeze}
+            };
+        }
+        input_json["initialGuess"] = initial_guess_json;
         
         input_json["grids"] = {config.grid_path};
         
@@ -553,8 +577,38 @@ MockDataConfig load_config_from_json(const std::string& filename) {
     if (j.contains("output_dir")) config.output_dir = j["output_dir"];
     if (j.contains("num_threads")) config.num_threads = j["num_threads"];
     
+    // Load wavelength sampling mode
+    if (j.contains("use_nyquist_sampling")) {
+        config.use_nyquist_sampling = j["use_nyquist_sampling"];
+    }
+    
+    // Load initial guesses
+    if (j.contains("initialGuess")) {
+        for (auto& [key, val] : j["initialGuess"].items()) {
+            MockDataConfig::InitialGuess guess;
+            if (val.contains("value")) guess.value = val["value"];
+            if (val.contains("freeze")) guess.freeze = val["freeze"];
+            config.initial_guesses[key] = guess;
+        }
+    }
+    
     return config;
 }
+
+MockDataConfig::InitialGuess parse_initial_guess(const std::string& str) {
+    MockDataConfig::InitialGuess guess;
+    auto pos = str.find(',');
+    if (pos != std::string::npos) {
+        guess.value = std::stod(str.substr(0, pos));
+        std::string freeze_str = str.substr(pos + 1);
+        guess.freeze = (freeze_str == "true" || freeze_str == "1");
+    } else {
+        guess.value = std::stod(str);
+        guess.freeze = false;
+    }
+    return guess;
+}
+
 
 int main(int argc, char** argv) {
     // Parse command line arguments
@@ -585,6 +639,15 @@ int main(int argc, char** argv) {
         ("o,output", "Output directory", cxxopts::value<std::string>()->default_value("./mock_data/"))
         ("j,threads", "Number of threads", cxxopts::value<int>()->default_value("1"))
         ("v,verbose", "Verbose output", cxxopts::value<bool>()->default_value("false"))
+        ("nyquist", "Use Nyquist sampling (default: false)", cxxopts::value<bool>()->default_value("false"))
+        ("init-vrad", "Initial vrad guess (value,freeze)", cxxopts::value<std::string>()->default_value("0,false"))
+        ("init-vsini", "Initial vsini guess (value,freeze)", cxxopts::value<std::string>()->default_value("10,false"))
+        ("init-zeta", "Initial zeta guess (value,freeze)", cxxopts::value<std::string>()->default_value("0,true"))
+        ("init-teff", "Initial teff guess (value,freeze)", cxxopts::value<std::string>()->default_value("25000,false"))
+        ("init-logg", "Initial logg guess (value,freeze)", cxxopts::value<std::string>()->default_value("5.5,false"))
+        ("init-xi", "Initial xi guess (value,freeze)", cxxopts::value<std::string>()->default_value("0,true"))
+        ("init-z", "Initial z guess (value,freeze)", cxxopts::value<std::string>()->default_value("0,true"))
+        ("init-he", "Initial HE guess (value,freeze)", cxxopts::value<std::string>()->default_value("-2,false"));
         ("h,help", "Print usage");
     
     auto result = options.parse(argc, argv);
@@ -674,6 +737,17 @@ int main(int argc, char** argv) {
         config.grid_path = result["grid"].as<std::string>();
         config.output_dir = result["output"].as<std::string>();
         config.num_threads = result["threads"].as<int>();
+
+        config.use_nyquist_sampling = result["nyquist"].as<bool>();
+
+        config.initial_guesses["c1_vrad"] = parse_initial_guess(result["init-vrad"].as<std::string>());
+        config.initial_guesses["c1_vsini"] = parse_initial_guess(result["init-vsini"].as<std::string>());
+        config.initial_guesses["c1_zeta"] = parse_initial_guess(result["init-zeta"].as<std::string>());
+        config.initial_guesses["c1_teff"] = parse_initial_guess(result["init-teff"].as<std::string>());
+        config.initial_guesses["c1_logg"] = parse_initial_guess(result["init-logg"].as<std::string>());
+        config.initial_guesses["c1_xi"] = parse_initial_guess(result["init-xi"].as<std::string>());
+        config.initial_guesses["c1_z"] = parse_initial_guess(result["init-z"].as<std::string>());
+        config.initial_guesses["c1_HE"] = parse_initial_guess(result["init-he"].as<std::string>());
     }
     
     config.verbose = result["verbose"].as<bool>();

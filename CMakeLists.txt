@@ -3,6 +3,10 @@ cmake_policy(SET CMP0074 NEW)       # honour *_ROOT / CMAKE_PREFIX_PATH
 
 project(DIGGA LANGUAGES C CXX Fortran)
 
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 OLD)
+endif()
+
 # ---------------------------------------------------------------------------
 # 0. Tell CMake where Home-brew lives (needed only on macOS)
 # ---------------------------------------------------------------------------
@@ -53,7 +57,7 @@ find_package(CUDAToolkit QUIET)
 find_package(Eigen3        REQUIRED)
 find_package(OpenMP        COMPONENTS C CXX Fortran)   # “REQUIRED” later
 find_package(OpenBLAS      REQUIRED)
-find_package(Boost         REQUIRED COMPONENTS filesystem)
+find_package(Boost         REQUIRED CONFIG COMPONENTS filesystem)
 find_package(nlohmann_json REQUIRED)
 find_package(Python3       REQUIRED COMPONENTS Interpreter Development NumPy)
 find_package(TBB           REQUIRED)
@@ -81,10 +85,9 @@ find_library(CCFITS_LIB  CCfits   REQUIRED)
 find_library(CFITSIO_LIB cfitsio  REQUIRED)
 
 # ---------------------------------------------------------------------------
-# 5. Main library  ----------------------------------------------------------
-#     (renamed to DIGGAlib)
+# 5. Core library (no Python, no matplotlib) – this is what ASTRA links
 # ---------------------------------------------------------------------------
-add_library(DIGGAlib
+add_library(DIGGAcore
     src/Spectrum.cpp
     src/SpectrumCache.cpp
     src/NyquistGrid.cpp
@@ -99,143 +102,130 @@ add_library(DIGGAlib
     src/JsonUtils.cpp
     src/MultiDatasetCost.cpp
     src/ContinuumUtils.cpp
-    src/Resolution.cpp            # always built (CPU)
+    src/Resolution.cpp
     src/Chi2Utils.cpp
     src/UnifiedFitWorkflow.cpp
-    src/ReportUtils.cpp
     src/SpectrumLoaders.cpp
+    src/DiggaAPI.cpp
+    src/DiggaAPI_json.cpp       # JSON adapters (separate TU)
 )
+add_library(DIGGA::core ALIAS DIGGAcore)
 
-target_include_directories(DIGGAlib
-    PUBLIC  
+target_include_directories(DIGGAcore
+    PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-    PRIVATE 
-        extern)
+    PRIVATE extern)
 
+target_compile_definitions(DIGGAcore PUBLIC
+    EIGEN_USE_BLAS EIGEN_USE_LAPACKE)
 
-# Tell Eigen to delegate to external BLAS / LAPACK
-target_compile_definitions(DIGGAlib PUBLIC
-    EIGEN_USE_BLAS
-    EIGEN_USE_LAPACKE)
-
-target_link_libraries(DIGGAlib PUBLIC
+target_link_libraries(DIGGAcore PUBLIC
     Eigen3::Eigen
     OpenBLAS::OpenBLAS
     ${CCFITS_LIB}
     ${CFITSIO_LIB}
     nlohmann_json::nlohmann_json
     Boost::boost Boost::filesystem
-    Python3::Python Python3::NumPy
     TBB::tbb
     unordered_dense::unordered_dense)
 
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(DIGGAcore PUBLIC OpenMP::OpenMP_CXX)
+endif()
+
 # ---------------------------------------------------------------------------
-# 6. CUDA bits (only if toolkit really found) -------------------------------
+# 6. Optional CUDA attach to core
 # ---------------------------------------------------------------------------
 if(DIGGA_ENABLE_CUDA AND CUDAToolkit_FOUND AND CMAKE_CUDA_COMPILER)
-    message(STATUS "CUDA detected – GPU path enabled")
-
-    target_sources(DIGGAlib PRIVATE src/ResolutionCUDA.cu)
-
-    set_source_files_properties(src/ResolutionCUDA.cu
-        PROPERTIES
-            LANGUAGE CUDA
-            CUDA_STANDARD 20
-            CUDA_STANDARD_REQUIRED ON
-            CUDA_SEPARABLE_COMPILATION ON)
-
-    target_compile_options(DIGGAlib PRIVATE
+    target_sources(DIGGAcore PRIVATE src/ResolutionCUDA.cu)
+    set_source_files_properties(src/ResolutionCUDA.cu PROPERTIES
+        LANGUAGE CUDA CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON
+        CUDA_SEPARABLE_COMPILATION ON)
+    target_compile_options(DIGGAcore PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr
-                                    --diag-suppress=20014
-                                    --diag-suppress=20015
-                                    -Wno-deprecated-gpu-targets>)
-    target_compile_definitions(DIGGAlib PRIVATE DIGGA_USE_CUDA)
-    target_link_libraries(DIGGAlib  PRIVATE CUDA::cudart)
-else()
-    message(STATUS "CUDA not available – building CPU-only version")
+            --diag-suppress=20014 --diag-suppress=20015
+            -Wno-deprecated-gpu-targets>)
+    target_compile_definitions(DIGGAcore PRIVATE DIGGA_USE_CUDA)
+    target_link_libraries(DIGGAcore PRIVATE CUDA::cudart)
 endif()
 
 # ---------------------------------------------------------------------------
-# 7. OpenMP (only if compiler + libomp are present) -------------------------
+# 7. Report library (LaTeX + matplotlib-cpp). Optional – ASTRA doesn't need it.
 # ---------------------------------------------------------------------------
-if(OpenMP_CXX_FOUND)
-    target_link_libraries(DIGGAlib PUBLIC OpenMP::OpenMP_CXX)
+option(DIGGA_BUILD_REPORT "Build the PDF/plot reporting helpers" ON)
+if(DIGGA_BUILD_REPORT)
+    add_library(DIGGAreport src/ReportUtils.cpp)
+    add_library(DIGGA::report ALIAS DIGGAreport)
+    target_include_directories(DIGGAreport PRIVATE extern)
+    target_link_libraries(DIGGAreport
+        PUBLIC  DIGGAcore
+        PRIVATE Python3::Python Python3::NumPy)
+    target_compile_definitions(DIGGAreport PRIVATE
+        DIGGA_INSTALL_DATADIR=\"${CMAKE_INSTALL_FULL_DATADIR}/DIGGA\")
 endif()
 
 # ---------------------------------------------------------------------------
-# 8. Command-line executable ------------------------------------------------
-#     (keeps the short name DIGGA)
+# 8. CLI executable
 # ---------------------------------------------------------------------------
 add_executable(DIGGA src/main.cpp)
+target_include_directories(DIGGA PRIVATE extern)
+target_link_libraries(DIGGA PRIVATE DIGGAcore cxxopts::cxxopts)
+if(DIGGA_BUILD_REPORT)
+    target_link_libraries(DIGGA PRIVATE DIGGAreport Python3::Python)
+    target_compile_definitions(DIGGA PRIVATE DIGGA_HAVE_REPORT)
+endif()
 
-# Put required runtime files next to the executable
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/global_settings.json
                ${CMAKE_CURRENT_BINARY_DIR}/global_settings.json COPYONLY)
 
-target_include_directories(DIGGA PRIVATE extern)
-
-target_link_libraries(DIGGA PRIVATE
-    DIGGAlib
-    cxxopts::cxxopts
-    Python3::Python)
+add_executable(mock_data_generator src/mock_data_generator.cpp)
+target_link_libraries(mock_data_generator PRIVATE DIGGAcore cxxopts::cxxopts)
 
 # ---------------------------------------------------------------------------
-# 9. Install & export -------------------------------------------------------
+# 9. Install & export
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
-# Helper script
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/DIGGA_multiplot.py
-               ${CMAKE_CURRENT_BINARY_DIR}/DIGGA_multiplot.py COPYONLY)
-install(PROGRAMS src/DIGGA_multiplot.py
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/DIGGA)
+set(_digga_targets DIGGAcore)
+if(DIGGA_BUILD_REPORT)
+    list(APPEND _digga_targets DIGGAreport)
+endif()
 
-# Compile-time constant with install location (on the library)
-target_compile_definitions(DIGGAlib PRIVATE
-    DIGGA_INSTALL_DATADIR=\"${CMAKE_INSTALL_FULL_DATADIR}/DIGGA\")
-
-# Data file
-install(FILES global_settings.json
-        DESTINATION ${CMAKE_INSTALL_BINDIR})
-
-# Library
-install(TARGETS DIGGAlib
+install(TARGETS ${_digga_targets} DIGGA mock_data_generator
         EXPORT  DIGGATargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-# Executable
-install(TARGETS DIGGA
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-
-# Public headers
+# FIX: headers are .hpp, not .h
 install(DIRECTORY include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-        FILES_MATCHING PATTERN "*.h")
+        FILES_MATCHING PATTERN "*.hpp")
 
-# CMake export file
+install(FILES global_settings.json DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(DIGGA_BUILD_REPORT)
+    install(PROGRAMS src/DIGGA_multiplot.py
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/DIGGA)
+endif()
+
 install(EXPORT DIGGATargets
         FILE       DIGGATargets.cmake
-        NAMESPACE  specfit::
+        NAMESPACE  DIGGA::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/DIGGA)
 
-# ---------------------------------------------------------------------------
-# 10. Mock Data Generator executable ----------------------------------------
-# ---------------------------------------------------------------------------
-add_executable(mock_data_generator src/mock_data_generator.cpp)
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/DIGGAConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/DIGGAConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/DIGGA)
 
-target_link_libraries(mock_data_generator PRIVATE
-    DIGGAlib
-    cxxopts::cxxopts
-)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/DIGGAConfigVersion.cmake
+    VERSION 0.1.0 COMPATIBILITY SameMajorVersion)
 
-# Copy to build directory
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/global_settings.json
-               ${CMAKE_CURRENT_BINARY_DIR}/global_settings.json COPYONLY)
-
-# Installation
-install(TARGETS mock_data_generator
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/DIGGAConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/DIGGAConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/DIGGA)
