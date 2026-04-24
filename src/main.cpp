@@ -3,6 +3,7 @@
 #include "specfit/CommonTypes.hpp"
 #include "specfit/SyntheticModel.hpp"
 #include "specfit/SpectrumCache.hpp"
+#include "specfit/DiggaAPI.hpp"
 #include <cxxopts.hpp>
 #include <filesystem>
 #include <fstream>
@@ -16,6 +17,7 @@
 
 namespace fs = std::filesystem;
 using namespace specfit;
+namespace api = specfit::api;
 
 namespace {
 
