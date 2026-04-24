@@ -10,6 +10,14 @@ namespace specfit { class UnifiedFitWorkflow; }   // forward decl in parent ns
 
 namespace specfit::api {
 
+enum class Status {
+    Ok,
+    InvalidInput,       // config was rejected before any work started
+    PreprocessingFailed,// every spectrum got filtered/failed to load
+    FitFailed,          // workflow threw during the LM/Powell stages
+    InternalError       // unexpected C++ exception
+};
+
 // ---------- Global settings (one per DiggaSession) -----------------------
 struct GlobalSettings {
     std::vector<std::string> base_paths;   // where to look up model grids
@@ -128,6 +136,9 @@ struct FitResult {
     std::vector<double> raw_params;
     std::vector<double> raw_uncertainties;
     std::vector<bool>   raw_free_mask;
+    Status       status = Status::Ok;
+    std::string  error_message;      // empty if status == Ok
+    std::vector<std::string> warnings;
 };
 
 // ---------- The session object --------------------------------------------
@@ -159,6 +170,7 @@ public:
                       bool make_plots = true, bool make_pdf = true) const;
 
 private:
+    FitResult run_impl();
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

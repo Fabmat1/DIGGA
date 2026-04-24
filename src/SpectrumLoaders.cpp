@@ -144,52 +144,79 @@ void to_eigen(const std::vector<std::array<double,NC>>& rows,
 
 Spectrum load_ascii_2col(const std::string& path)
 {
-    // -------------------- 1. read file -------------------------------------------------
     const auto rows = read_ascii_table(path, /*ncols=*/2);
 
-    // -------------------- 2. move & sort ----------------------------------------------
     Vector lambda, flux;
     to_eigen<3>(rows, lambda, flux);
-
-    // -------------------- 3. estimate per-pixel noise ---------------------------------
     const Eigen::Index len = lambda.size();
 
-    int npix_box = std::max(700,
-                            static_cast<int>(std::round(len / 10.0)));
-    npix_box     = std::min(npix_box,
-                            static_cast<int>(std::round(len / 4.0)));
-    
-    Spectrum spec_out; 
-    spec_out.lambda = lambda;
-    spec_out.flux = flux;
-    SNRCurve snr;
+    // --- Defensive input validation (never reach the SNR code with bad data) -
+    if (len < 10)
+        throw std::runtime_error("load_ascii_2col: spectrum too short ("
+                                 + std::to_string(len) + " points)");
+    if (!lambda.allFinite() || !flux.allFinite())
+        throw std::runtime_error("load_ascii_2col: non-finite values");
+    for (Eigen::Index i = 1; i < len; ++i)
+        if (!(lambda[i] > lambda[i-1]))
+            throw std::runtime_error("load_ascii_2col: wavelengths not "
+                                     "strictly ascending");
 
-    snr = spec_out.estimate_snr_curve("der_snr", npix_box);
+    // --- Normalise first, so spec_out ends up normalised -------------------
+    const double med = median(flux);
+    if (!std::isfinite(med) || med == 0.0)
+        throw std::runtime_error("load_ascii_2col: invalid flux median");
+    flux.array() /= med;
 
-    // build extended table [λ₀ , λ_curve , λ_last]   similar for noise
-    Vector x_old(snr.lambda.size() + 2);
-    Vector y_old(snr.noise .size() + 2);
+    // --- Prepare spec_out fully before calling any SNR routine -------------
+    Spectrum spec_out;
+    spec_out.lambda     = lambda;
+    spec_out.flux       = flux;
+    spec_out.sigma      = Vector::Ones(len);                 // placeholder
+    spec_out.ignoreflag = std::vector<int>(len, 1);          // all good
 
-    x_old[0]                      = lambda[0];
-    x_old[x_old.size() - 1]       = lambda[len - 1];
-    y_old[0]                      = snr.noise[0];
-    y_old[y_old.size() - 1]       = snr.noise[snr.noise.size() - 1];
-    x_old.segment(1, snr.lambda.size()) = snr.lambda;
-    y_old.segment(1, snr.noise .size()) = snr.noise;
+    // --- Choose a safe window size ----------------------------------------
+    int npix_box = std::clamp<int>(static_cast<int>(std::round(len / 10.0)),
+                                   50,
+                                   static_cast<int>(len / 4));
+    if (npix_box < 50) npix_box = std::max<int>(50, int(len / 2));
 
-    Vector sigma = linear_interpolate(lambda, x_old, y_old);
-    spec_out.sigma = sigma;
+    // --- SNR curve with a fallback (DER_SNR is the known-crashy code) ------
+    Vector sigma_out;
+    try {
+        SNRCurve snr = spec_out.estimate_snr_curve("der_snr", npix_box);
 
+        if (snr.lambda.size() < 2 ||
+            !snr.noise.allFinite())
+            throw std::runtime_error("bad SNR curve");
 
-    // -------------------- 4. normalise by the median ----------------------------------
-    // const double med = median(flux);
-    // if (!std::isfinite(med) || std::abs(med) == 0.0)
-    //     throw std::runtime_error("load_ascii_2col: invalid flux median");
+        Vector x_old(snr.lambda.size() + 2);
+        Vector y_old(snr.noise .size() + 2);
+        x_old[0] = lambda[0];
+        x_old[x_old.size()-1] = lambda[len-1];
+        y_old[0] = snr.noise[0];
+        y_old[y_old.size()-1] = snr.noise[snr.noise.size()-1];
+        x_old.segment(1, snr.lambda.size()) = snr.lambda;
+        y_old.segment(1, snr.noise .size()) = snr.noise;
 
-    // flux  .array() /= med;
-    // sigma .array() /= med;
+        sigma_out = linear_interpolate(lambda, x_old, y_old);
+        if (!sigma_out.allFinite()) throw std::runtime_error("bad interp");
+    }
+    catch (const std::exception& e) {
+        // Fallback: robust global sigma from MAD of first differences.
+        // Scaled by 1/(sqrt(2)) because var(x_{i+1}-x_i)=2 var(x_i) for white noise.
+        Vector d(len - 1);
+        for (Eigen::Index i = 0; i < len - 1; ++i) d[i] = flux[i+1] - flux[i];
+        std::vector<double> abs_d(d.size());
+        for (Eigen::Index i = 0; i < d.size(); ++i) abs_d[i] = std::abs(d[i]);
+        std::nth_element(abs_d.begin(),
+                         abs_d.begin() + abs_d.size()/2,
+                         abs_d.end());
+        double mad   = abs_d[abs_d.size()/2];
+        double sigma = (mad > 0 ? mad : 1e-3) / std::sqrt(2.0) * 1.4826;
+        sigma_out    = Vector::Constant(len, sigma);
+    }
 
-
+    spec_out.sigma = sigma_out;
     return spec_out;
 }
 

@@ -45,12 +45,43 @@ bool preprocess_one(const SpectrumFileInput& f,
                     std::string&             reject_reason)
 {
     Spectrum raw;
+    if (!std::filesystem::exists(f.filename)) {
+    reject_reason = "file does not exist: " + f.filename;
+    return false;
+    }
+    auto fsize = std::filesystem::file_size(f.filename);
+    if (fsize < 128) {
+        reject_reason = "file too small (" + std::to_string(fsize) + " bytes)";
+        return false;
+    }
     try { raw = load_spectrum(f.filename, f.spectype); }
     catch (const std::exception& e) {
         reject_reason = std::string("load failed: ") + e.what();
         return false;
     }
     if (raw.lambda.size() == 0) { reject_reason = "empty spectrum"; return false; }
+    const auto n = raw.lambda.size();
+    if (n < 10) { reject_reason = "spectrum too short (<10 points)"; return false; }
+    if (raw.flux.size() != n || raw.sigma.size() != n) {
+        reject_reason = "lambda/flux/sigma size mismatch from loader";
+        return false;
+    }
+    if (!raw.lambda.allFinite() || !raw.flux.allFinite()) {
+        reject_reason = "non-finite values in loaded spectrum";
+        return false;
+    }
+    // lambda must be strictly increasing for the Nyquist/rebin step
+    for (Eigen::Index i = 1; i < n; ++i) {
+        if (!(raw.lambda[i] > raw.lambda[i-1])) {
+            reject_reason = "wavelength grid not strictly increasing";
+            return false;
+        }
+    }
+
+    if (f.resSlope <= 0.0) {
+        reject_reason = "resSlope must be > 0";
+        return false;
+    }
 
     const double wmin = raw.lambda.minCoeff();
 
@@ -72,6 +103,8 @@ bool preprocess_one(const SpectrumFileInput& f,
     Vector nyq = build_nyquist_grid(raw.lambda.minCoeff(),
                                     raw.lambda.maxCoeff(),
                                     f.resOffset, f.resSlope);
+    if (nyq.size() < 10) { reject_reason = "Nyquist grid too short"; return false; }
+
 
     Spectrum rb;
     rb.lambda = nyq;
@@ -89,6 +122,11 @@ bool preprocess_one(const SpectrumFileInput& f,
             if (wl >= r[0] && wl <= r[1]) { flags[j] = 0; break; }
     }
     rb.ignoreflag = flags;
+
+    if (!rb.flux.allFinite() || !rb.sigma.allFinite()) {
+        reject_reason = "non-finite values after rebin";
+        return false;
+    }
 
     const auto anchors = f.cspline_anchorpoints.value_or(obs.cspline_anchorpoints);
     std::vector<std::tuple<double,double,double>> intervals;
@@ -125,9 +163,84 @@ inline void push_param(std::vector<StellarParamResult>& v,
     v.push_back(s);
 }
 
+void require(bool cond, const char* what) {
+    if (!cond) throw std::invalid_argument(what);
+}
+
+void validate(const GlobalSettings& gs, const FitInput& fi)
+{
+    require(!gs.base_paths.empty(),
+            "GlobalSettings.base_paths is empty");
+    require(!fi.components.empty(),
+            "FitInput.components is empty");
+    require(!fi.observations.empty(),
+            "FitInput.observations is empty");
+
+    for (std::size_t c = 0; c < fi.components.size(); ++c) {
+        const auto& ci = fi.components[c];
+        require(!ci.grid_relative_path.empty(),
+                "component has empty grid_relative_path");
+        auto finite = [](double x){ return std::isfinite(x); };
+        require(finite(ci.teff) && finite(ci.logg) && finite(ci.z) &&
+                finite(ci.he)   && finite(ci.xi)   && finite(ci.vsini) &&
+                finite(ci.vrad) && finite(ci.zeta),
+                "component has non-finite initial guess");
+        require(ci.vsini >= 0.0, "vsini must be >= 0");
+    }
+
+    bool has_file = false;
+    for (const auto& obs : fi.observations) {
+        for (const auto& f : obs.files) {
+            has_file = true;
+            require(!f.filename.empty(), "spectrum file has empty filename");
+            require(!f.spectype.empty(),
+                    "spectrum file has empty spectype");
+            require(std::isfinite(f.resSlope) && std::isfinite(f.resOffset),
+                    "resOffset/resSlope must be finite");
+        }
+    }
+    require(has_file, "no spectrum files supplied");
+}
+
 } // anonymous
 
 FitResult DiggaSession::run()
+{
+    FitResult R;
+    try {
+        validate(impl_->gs, impl_->fi);
+        R = run_impl();
+        R.status = Status::Ok;
+        return R;
+    }
+    catch (const std::invalid_argument& e) {
+        R.status = Status::InvalidInput;
+        R.error_message = e.what();
+    }
+    catch (const std::runtime_error& e) {
+        // Thrown by loaders, preprocess_one via our pipeline, or
+        // by explicit checks inside run_impl().
+        R.status = R.spectra.empty() ? Status::PreprocessingFailed
+                                     : Status::FitFailed;
+        R.error_message = e.what();
+    }
+    catch (const std::bad_alloc& e) {
+        R.status = Status::InternalError;
+        R.error_message = std::string("out of memory: ") + e.what();
+    }
+    catch (const std::exception& e) {
+        R.status = Status::InternalError;
+        R.error_message = std::string("unexpected exception: ") + e.what();
+    }
+    catch (...) {
+        R.status = Status::InternalError;
+        R.error_message = "unknown exception";
+    }
+    if (impl_->logger) impl_->logger("[DIGGA] " + R.error_message);
+    return R;
+}
+
+FitResult DiggaSession::run_impl()
 {
     const auto& gs = impl_->gs;
     const auto& fi = impl_->fi;
