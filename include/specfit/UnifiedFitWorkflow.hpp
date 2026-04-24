@@ -50,6 +50,15 @@ public:
     const double& get_final_chi2() const { return summary_.final_chi2; }
     const std::vector<bool>& get_free_mask() const { return last_free_mask_; }
 
+    const ParameterIndexer& get_indexer() const { return indexer_; }
+    int  n_components() const { return static_cast<int>(model_.params.size()); }
+
+    // total count of continuum parameters across all datasets
+    int  n_continuum_params() const {
+        int n = 0; for (const auto& d : datasets_) n += (int)d.cont_y.size();
+        return n;
+    }
+
 private:
     void solve_stage(const std::set<std::string>& free_params,
                      int                          max_iterations,

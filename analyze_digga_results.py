@@ -66,7 +66,7 @@ def setup_logging(log_file: str = "digga_analysis.log", level: str = "INFO"):
 class DIGGAAnalyzer:
     def __init__(self, data_dir='.', results_dir='fit_results', exclude_params=None):
         self.data_dir = Path(data_dir)
-        self.results_dir = Path(results_dir)
+        self.results_dir = self.data_dir / results_dir  # ← Fixed: now relative to data_dir
         self.data = defaultdict(list)
         self.exclude_params = set(exclude_params or [])
         
