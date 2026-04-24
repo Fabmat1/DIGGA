@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+namespace specfit { class UnifiedFitWorkflow; }   // forward decl in parent ns
+
 namespace specfit::api {
 
 // ---------- Global settings (one per DiggaSession) -----------------------
@@ -35,6 +37,11 @@ struct GlobalSettings {
 
     bool   verbose        = true;
     bool   debug_plots    = false;
+
+    class UnifiedFitWorkflow;   // forward decl
+    std::function<void(int stage_index,
+        const ::specfit::UnifiedFitWorkflow& wf)>
+    on_stage_complete;
 };
 
 // ---------- Per-fit input -------------------------------------------------

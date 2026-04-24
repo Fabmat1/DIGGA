@@ -182,12 +182,12 @@ Spectrum load_ascii_2col(const std::string& path)
 
 
     // -------------------- 4. normalise by the median ----------------------------------
-    const double med = median(flux);
-    if (!std::isfinite(med) || std::abs(med) == 0.0)
-        throw std::runtime_error("load_ascii_2col: invalid flux median");
+    // const double med = median(flux);
+    // if (!std::isfinite(med) || std::abs(med) == 0.0)
+    //     throw std::runtime_error("load_ascii_2col: invalid flux median");
 
-    flux  .array() /= med;
-    sigma .array() /= med;
+    // flux  .array() /= med;
+    // sigma .array() /= med;
 
 
     return spec_out;
@@ -204,12 +204,12 @@ Spectrum load_ascii_3col(const std::string& path)
     to_eigen<3>(rows, lambda, flux, &sigma);
 
     // -------------------- 3. normalise by the median ----------------------------------
-    const double med = median(flux);
-    if (!std::isfinite(med) || std::abs(med) == 0.0)
-        throw std::runtime_error("load_ascii_3col: invalid flux median");
+    // const double med = median(flux);
+    // if (!std::isfinite(med) || std::abs(med) == 0.0)
+    //     throw std::runtime_error("load_ascii_3col: invalid flux median");
 
-    flux .array() /= med;
-    sigma.array() /= med;
+    // flux .array() /= med;
+    // sigma.array() /= med;
 
     return Spectrum{lambda, flux, sigma};
 }

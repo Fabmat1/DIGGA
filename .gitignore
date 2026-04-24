@@ -6,3 +6,7 @@ perf*
 input/676673613609807360.json
 /results
 cmake_install.cmake
+input/*
+XSHOOTER_mock.json
+*.log
+analyze_digga_results.py

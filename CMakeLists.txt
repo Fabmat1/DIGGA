@@ -3,6 +3,10 @@ cmake_policy(SET CMP0074 NEW)       # honour *_ROOT / CMAKE_PREFIX_PATH
 
 project(DIGGA LANGUAGES C CXX Fortran)
 
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 OLD)
+endif()
+
 # ---------------------------------------------------------------------------
 # 0. Tell CMake where Home-brew lives (needed only on macOS)
 # ---------------------------------------------------------------------------
@@ -53,7 +57,7 @@ find_package(CUDAToolkit QUIET)
 find_package(Eigen3        REQUIRED)
 find_package(OpenMP        COMPONENTS C CXX Fortran)   # “REQUIRED” later
 find_package(OpenBLAS      REQUIRED)
-find_package(Boost         REQUIRED COMPONENTS filesystem)
+find_package(Boost         REQUIRED CONFIG COMPONENTS filesystem)
 find_package(nlohmann_json REQUIRED)
 find_package(Python3       REQUIRED COMPONENTS Interpreter Development NumPy)
 find_package(TBB           REQUIRED)
@@ -225,21 +229,3 @@ install(FILES
     ${CMAKE_CURRENT_BINARY_DIR}/DIGGAConfig.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/DIGGAConfigVersion.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/DIGGA)
-
-# ---------------------------------------------------------------------------
-# 10. Mock Data Generator executable ----------------------------------------
-# ---------------------------------------------------------------------------
-add_executable(mock_data_generator src/mock_data_generator.cpp)
-
-target_link_libraries(mock_data_generator PRIVATE
-    DIGGAlib
-    cxxopts::cxxopts
-)
-
-# Copy to build directory
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/global_settings.json
-               ${CMAKE_CURRENT_BINARY_DIR}/global_settings.json COPYONLY)
-
-# Installation
-install(TARGETS mock_data_generator
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

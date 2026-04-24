@@ -1,9 +1,7 @@
-#include "specfit/DiggaAPI.hpp"
 #include "specfit/JsonUtils.hpp"
 #include "specfit/UnifiedFitWorkflow.hpp"
 #include "specfit/CommonTypes.hpp"
 #include "specfit/SyntheticModel.hpp"
-#include "specfit/ReportUtils.hpp"
 #include "specfit/SpectrumCache.hpp"
 #include <cxxopts.hpp>
 #include <filesystem>
@@ -11,6 +9,10 @@
 #include <iostream>
 #include <chrono>
 #include <iomanip>
+
+#ifdef DIGGA_HAVE_REPORT
+#include "specfit/ReportUtils.hpp"
+#endif
 
 namespace fs = std::filesystem;
 using namespace specfit;
@@ -79,7 +81,20 @@ int main(int argc, char** argv)
 
         auto gs = api::global_settings_from_json_file(find_global_settings());
         auto fi = api::fit_input_from_json_file(cli["fit"].as<std::string>());
-        gs.debug_plots = cli.count("debug-plots") > 0;
+        if (cli.count("debug-plots")) {
+        #ifdef DIGGA_HAVE_REPORT
+            gs.debug_plots = true;
+            gs.on_stage_complete =
+                [&](int stage_idx, const specfit::UnifiedFitWorkflow& wf) {
+                    namespace fs = std::filesystem;
+                    fs::create_directories("debug");
+                    specfit::MultiPanelPlotter P(1.0, false);
+                    // you'll need access to datasets here — see note below
+                };
+        #else
+            std::cerr << "--debug-plots requires DIGGA_BUILD_REPORT=ON\n";
+        #endif
+        }
 
         if (cli.count("output-synthetic"))
             return run_synthetic_only(fi, gs);
