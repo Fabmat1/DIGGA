@@ -100,6 +100,9 @@ read_ascii_table(const std::string& path,
         } else {
             if (!(ss >> row[0] >> row[1] >> row[2])) continue;
         }
+        if (!(std::isfinite(row[0]) && std::isfinite(row[1]) &&
+            (ncols == 2 || std::isfinite(row[2]))))
+            continue;                                      // silently drop bad rows
         rows.push_back(row);
     }
     if (rows.empty())

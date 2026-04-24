@@ -10,15 +10,23 @@ namespace specfit {
 
 // Helper function to compute median
 static Real median(Vector vec) {
-    auto n = vec.size();
-    if (n == 0) return 0.0;
-    
-    std::sort(vec.data(), vec.data() + n);
-    if (n % 2 == 0) {
-        return 0.5 * (vec[n/2 - 1] + vec[n/2]);
-    } else {
-        return vec[n/2];
+    // Filter out NaN/Inf; std::sort on non-finite values is UB and will
+    // corrupt the heap with libstdc++'s introsort.
+    Eigen::Index n = vec.size();
+    Eigen::Index w = 0;
+    for (Eigen::Index i = 0; i < n; ++i)
+        if (std::isfinite(vec[i])) vec[w++] = vec[i];
+
+    if (w == 0) return 0.0;                       // caller must handle 0
+
+    const Eigen::Index k = w / 2;
+    std::nth_element(vec.data(), vec.data() + k, vec.data() + w);
+    Real m = vec[k];
+    if ((w & 1) == 0) {
+        Real lo = *std::max_element(vec.data(), vec.data() + k);
+        m = 0.5 * (m + lo);
     }
+    return m;
 }
 
 // Helper function for linear interpolation
@@ -111,29 +119,35 @@ SNRResult Spectrum::estimate_snr_gaussian_impl(const Vector& flux_vec, int neigh
 
 SNRResult Spectrum::estimate_snr_der_impl(const Vector& flux_vec, int order) const {
     SNRResult result;
-    
     const int npixmin = 6;
     int n = flux_vec.size();
-    
-    if (n < npixmin) {
+    if (n < npixmin)
         throw std::runtime_error("Not enough data points for DER_SNR estimation");
-    }
-    
-    // 3rd order DER_SNR
-    if (order == 3) {
-        const Real f3 = 0.6052697319;
-        
-        Vector diff(n - 4);
-        for (int i = 2; i < n - 2; ++i) {
-            diff[i - 2] = std::abs(2.0 * flux_vec[i] - flux_vec[i - 2] - flux_vec[i + 2]);
-        }
-        
-        result.noise = f3 * median(diff);
-        result.snr = median(flux_vec) / result.noise;
-    } else {
+    if (order != 3)
         throw std::runtime_error("Only 3rd order DER_SNR is implemented");
+
+    const Real f3 = 0.6052697319;
+
+    Vector diff(n - 4);
+    Eigen::Index w = 0;
+    for (int i = 2; i < n - 2; ++i) {
+        const Real a = flux_vec[i];
+        const Real b = flux_vec[i - 2];
+        const Real c = flux_vec[i + 2];
+        if (!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(c))
+            continue;                              // skip bad pixels
+        diff[w++] = std::abs(2.0*a - b - c);
     }
-    
+    diff.conservativeResize(w);                    // drop the tail
+
+    if (w == 0)                                     // entire window unusable
+        throw std::runtime_error("DER_SNR: no finite pixels in window");
+
+    result.noise = f3 * median(diff);
+    if (!std::isfinite(result.noise) || result.noise <= 0.0)
+        throw std::runtime_error("DER_SNR: non-positive noise estimate");
+
+    result.snr = median(flux_vec) / result.noise;
     return result;
 }
 

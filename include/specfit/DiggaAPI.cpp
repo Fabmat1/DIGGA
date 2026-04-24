@@ -60,6 +60,10 @@ bool preprocess_one(const SpectrumFileInput& f,
         return false;
     }
     if (raw.lambda.size() == 0) { reject_reason = "empty spectrum"; return false; }
+    if (!raw.lambda.allFinite() || !raw.flux.allFinite() || !raw.sigma.allFinite()) {
+        reject_reason = "loaded spectrum contains non-finite values";
+        return false;
+    }
     const auto n = raw.lambda.size();
     if (n < 10) { reject_reason = "spectrum too short (<10 points)"; return false; }
     if (raw.flux.size() != n || raw.sigma.size() != n) {
