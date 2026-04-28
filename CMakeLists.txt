@@ -32,7 +32,9 @@ endif()
 # ---------------------------------------------------------------------------
 # 2. C++ settings
 # ---------------------------------------------------------------------------
-set(CMAKE_CXX_STANDARD 20)
+if(NOT CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 20)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_compile_options(
