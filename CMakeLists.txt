@@ -37,12 +37,16 @@ if(NOT CMAKE_CXX_STANDARD)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(PROJECT_IS_TOP_LEVEL)
+    add_compile_options(
+        -march=native
+        -funroll-loops
+        -ftree-vectorize
+    )
+endif()
 add_compile_options(
     -Wno-deprecated-declarations
     -Wno-dev
-    -march=native
-    -funroll-loops
-    -ftree-vectorize
 )
 
 # ---------------------------------------------------------------------------
