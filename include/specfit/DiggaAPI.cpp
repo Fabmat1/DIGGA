@@ -18,6 +18,71 @@
 
 namespace specfit::api {
 
+// ------------------------------------------------------------------------
+// Out-of-line special members.
+//
+// These types own Eigen matrices, std::vector, std::string and std::function.
+// Defining their special members here forces all corresponding allocations,
+// copies, moves, and destruction to happen inside DIGGAcore's translation
+// units, with DIGGAcore's compile flags (C++ standard, -march, Eigen
+// alignment macros, …). Host TUs that include the header therefore cannot
+// generate divergent inline copies and cannot trip ABI mismatches on
+// cleanup.
+// ------------------------------------------------------------------------
+
+GlobalSettings::GlobalSettings()                                          = default;
+GlobalSettings::~GlobalSettings()                                         = default;
+GlobalSettings::GlobalSettings(const GlobalSettings&)                     = default;
+GlobalSettings::GlobalSettings(GlobalSettings&&) noexcept                 = default;
+GlobalSettings& GlobalSettings::operator=(const GlobalSettings&)          = default;
+GlobalSettings& GlobalSettings::operator=(GlobalSettings&&) noexcept      = default;
+
+SpectrumFileInput::SpectrumFileInput()                                    = default;
+SpectrumFileInput::~SpectrumFileInput()                                   = default;
+SpectrumFileInput::SpectrumFileInput(const SpectrumFileInput&)            = default;
+SpectrumFileInput::SpectrumFileInput(SpectrumFileInput&&) noexcept        = default;
+SpectrumFileInput& SpectrumFileInput::operator=(const SpectrumFileInput&) = default;
+SpectrumFileInput& SpectrumFileInput::operator=(SpectrumFileInput&&) noexcept = default;
+
+ObservationInput::ObservationInput()                                      = default;
+ObservationInput::~ObservationInput()                                     = default;
+ObservationInput::ObservationInput(const ObservationInput&)               = default;
+ObservationInput::ObservationInput(ObservationInput&&) noexcept           = default;
+ObservationInput& ObservationInput::operator=(const ObservationInput&)    = default;
+ObservationInput& ObservationInput::operator=(ObservationInput&&) noexcept = default;
+
+FitInput::FitInput()                                                      = default;
+FitInput::~FitInput()                                                     = default;
+FitInput::FitInput(const FitInput&)                                       = default;
+FitInput::FitInput(FitInput&&) noexcept                                   = default;
+FitInput& FitInput::operator=(const FitInput&)                            = default;
+FitInput& FitInput::operator=(FitInput&&) noexcept                        = default;
+
+ComponentResult::ComponentResult()                                        = default;
+ComponentResult::~ComponentResult()                                       = default;
+ComponentResult::ComponentResult(const ComponentResult&)                  = default;
+ComponentResult::ComponentResult(ComponentResult&&) noexcept              = default;
+ComponentResult& ComponentResult::operator=(const ComponentResult&)       = default;
+ComponentResult& ComponentResult::operator=(ComponentResult&&) noexcept   = default;
+
+SpectrumResult::SpectrumResult()                                          = default;
+SpectrumResult::~SpectrumResult()                                         = default;
+SpectrumResult::SpectrumResult(const SpectrumResult&)                     = default;
+SpectrumResult::SpectrumResult(SpectrumResult&&) noexcept                 = default;
+SpectrumResult& SpectrumResult::operator=(const SpectrumResult&)          = default;
+SpectrumResult& SpectrumResult::operator=(SpectrumResult&&) noexcept      = default;
+
+FitResult::FitResult()                                                    = default;
+FitResult::~FitResult()                                                   = default;
+FitResult::FitResult(const FitResult&)                                    = default;
+FitResult::FitResult(FitResult&&) noexcept                                = default;
+FitResult& FitResult::operator=(const FitResult&)                         = default;
+FitResult& FitResult::operator=(FitResult&&) noexcept                     = default;
+
+} // namespace specfit::api
+
+namespace specfit::api {
+
 struct DiggaSession::Impl {
     GlobalSettings gs;
     FitInput       fi;

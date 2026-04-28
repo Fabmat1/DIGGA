@@ -2,6 +2,7 @@
 #include "Types.hpp"
 #include <array>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -12,20 +13,20 @@ namespace specfit::api {
 
 enum class Status {
     Ok,
-    InvalidInput,       // config was rejected before any work started
-    PreprocessingFailed,// every spectrum got filtered/failed to load
-    FitFailed,          // workflow threw during the LM/Powell stages
-    InternalError       // unexpected C++ exception
+    InvalidInput,        // config was rejected before any work started
+    PreprocessingFailed, // every spectrum got filtered/failed to load
+    FitFailed,           // workflow threw during the LM/Powell stages
+    InternalError        // unexpected C++ exception
 };
 
 // ---------- Global settings (one per DiggaSession) -----------------------
 struct GlobalSettings {
-    std::vector<std::string> base_paths;   // where to look up model grids
+    std::vector<std::string> base_paths;       // model-grid roots
 
     // reporting / gui-only
     double xrange         = 500.0;
 
-    // spectrum rejection (applied during preprocessing)
+    // spectrum rejection
     double filter_snr     = 0.0;   // reject if SNR <= filter_snr (0 disables)
     double require_blue   = 0.0;   // reject if lambda_min >= require_blue (0 disables)
 
@@ -46,10 +47,18 @@ struct GlobalSettings {
     bool   verbose        = true;
     bool   debug_plots    = false;
 
-    class UnifiedFitWorkflow;   // forward decl
     std::function<void(int stage_index,
         const ::specfit::UnifiedFitWorkflow& wf)>
     on_stage_complete;
+
+    // Special members defined out-of-line in DiggaAPI.cpp so that the
+    // std::vector / std::function destructors run inside DIGGAcore's TU.
+    GlobalSettings();
+    ~GlobalSettings();
+    GlobalSettings(const GlobalSettings&);
+    GlobalSettings(GlobalSettings&&) noexcept;
+    GlobalSettings& operator=(const GlobalSettings&);
+    GlobalSettings& operator=(GlobalSettings&&) noexcept;
 };
 
 // ---------- Per-fit input -------------------------------------------------
@@ -60,6 +69,8 @@ struct StellarComponentInit {
     bool freeze_vrad=false, freeze_vsini=false, freeze_zeta=true;
     bool freeze_teff=false, freeze_logg=false, freeze_xi=true;
     bool freeze_z=false,    freeze_he=false;
+    // Trivially destructible (only POD + std::string). Implicit special
+    // members are fine.
 };
 
 struct SpectrumFileInput {
@@ -69,10 +80,16 @@ struct SpectrumFileInput {
     double resSlope  = 0.0;
     double barycorr  = 0.0;
 
-    // optional per-file overrides (otherwise inherit from ObservationInput)
     std::optional<std::array<double,2>>                  waveCut;
     std::optional<std::vector<std::array<double,2>>>     ignore;
     std::optional<std::vector<std::array<double,3>>>     cspline_anchorpoints;
+
+    SpectrumFileInput();
+    ~SpectrumFileInput();
+    SpectrumFileInput(const SpectrumFileInput&);
+    SpectrumFileInput(SpectrumFileInput&&) noexcept;
+    SpectrumFileInput& operator=(const SpectrumFileInput&);
+    SpectrumFileInput& operator=(SpectrumFileInput&&) noexcept;
 };
 
 struct ObservationInput {
@@ -80,29 +97,52 @@ struct ObservationInput {
     std::array<double,2> waveCut{ -1e300, 1e300 };
     std::vector<std::array<double,2>> ignore;
     std::vector<std::array<double,3>> cspline_anchorpoints;
+
+    ObservationInput();
+    ~ObservationInput();
+    ObservationInput(const ObservationInput&);
+    ObservationInput(ObservationInput&&) noexcept;
+    ObservationInput& operator=(const ObservationInput&);
+    ObservationInput& operator=(ObservationInput&&) noexcept;
 };
 
 struct FitInput {
-    std::vector<StellarComponentInit> components;   // c1, c2, ...
+    std::vector<StellarComponentInit> components;
     std::vector<ObservationInput>     observations;
-    std::string                       output_path;  // optional; used if reports requested
+    std::string                       output_path;
+
+    FitInput();
+    ~FitInput();
+    FitInput(const FitInput&);
+    FitInput(FitInput&&) noexcept;
+    FitInput& operator=(const FitInput&);
+    FitInput& operator=(FitInput&&) noexcept;
 };
 
 // ---------- Results -------------------------------------------------------
 struct StellarParamResult {
     double value  = 0.0;
-    double error  = 0.0;   // 0 if frozen
+    double error  = 0.0;       // 0 if frozen
     bool   frozen = false;
     bool   at_boundary = false;
+    // Trivially destructible — leave implicit.
 };
 
 struct ComponentResult {
     // each of these may be 1 (tied) or n_spectra (untied) long
     std::vector<StellarParamResult> vrad, vsini, zeta, teff, logg, xi, z, he;
+
+    ComponentResult();
+    ~ComponentResult();
+    ComponentResult(const ComponentResult&);
+    ComponentResult(ComponentResult&&) noexcept;
+    ComponentResult& operator=(const ComponentResult&);
+    ComponentResult& operator=(ComponentResult&&) noexcept;
 };
 
 struct SpectrumResult {
     std::string source_filename;
+
     // rebinned observed spectrum on the Nyquist grid (what the fit saw)
     Vector lambda;
     Vector flux;
@@ -117,6 +157,13 @@ struct SpectrumResult {
     // continuum-spline anchors
     Vector cont_x;
     Vector cont_y;
+
+    SpectrumResult();
+    ~SpectrumResult();
+    SpectrumResult(const SpectrumResult&);
+    SpectrumResult(SpectrumResult&&) noexcept;
+    SpectrumResult& operator=(const SpectrumResult&);
+    SpectrumResult& operator=(SpectrumResult&&) noexcept;
 };
 
 struct FitResult {
@@ -136,9 +183,17 @@ struct FitResult {
     std::vector<double> raw_params;
     std::vector<double> raw_uncertainties;
     std::vector<bool>   raw_free_mask;
-    Status       status = Status::Ok;
-    std::string  error_message;      // empty if status == Ok
+
+    Status                   status = Status::Ok;
+    std::string              error_message;     // empty if status == Ok
     std::vector<std::string> warnings;
+
+    FitResult();
+    ~FitResult();
+    FitResult(const FitResult&);
+    FitResult(FitResult&&) noexcept;
+    FitResult& operator=(const FitResult&);
+    FitResult& operator=(FitResult&&) noexcept;
 };
 
 // ---------- The session object --------------------------------------------
@@ -147,25 +202,29 @@ public:
     DiggaSession();
     ~DiggaSession();
 
+    DiggaSession(const DiggaSession&)            = delete;
+    DiggaSession& operator=(const DiggaSession&) = delete;
+    DiggaSession(DiggaSession&&) noexcept;
+    DiggaSession& operator=(DiggaSession&&) noexcept;
+
     void set_global_settings(const GlobalSettings& gs);
-    void set_fit_input     (const FitInput& fi);
+    void set_fit_input      (const FitInput& fi);
 
     void set_num_threads(int n);      // 0 = hardware_concurrency
 
-    // Optional progress callback: receives stage name and fractional progress [0,1]
+    // Optional progress callback: stage name + fractional progress [0,1]
     using ProgressFn = std::function<void(const std::string& stage, double frac)>;
     void set_progress_callback(ProgressFn cb);
 
-    // Optional log-line callback: receives a single log line (no trailing newline)
+    // Optional log-line callback
     using LogFn = std::function<void(const std::string& line)>;
     void set_log_callback(LogFn cb);
 
     // Runs preprocessing + UnifiedFitWorkflow + collects results.
-    // Throws std::runtime_error on fatal errors.
+    // Reports failures via FitResult::status / FitResult::error_message.
     FitResult run();
 
-    // If you want to emit the LaTeX/PDF report + plots, call after run().
-    // Requires DIGGAreport to be linked. Throws if that target wasn't built.
+    // Optional report writer (requires DIGGAreport).
     void write_report(const FitResult& r, const std::string& out_dir,
                       bool make_plots = true, bool make_pdf = true) const;
 
@@ -175,8 +234,7 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// ---------- JSON adapters (optional; in separate TU) ----------------------
-//   These let ASTRA reuse your existing .json files without duplicating code.
+// ---------- JSON adapters (defined in DiggaAPI_json.cpp) ------------------
 GlobalSettings global_settings_from_json_file(const std::string& path);
 FitInput       fit_input_from_json_file      (const std::string& path);
 
