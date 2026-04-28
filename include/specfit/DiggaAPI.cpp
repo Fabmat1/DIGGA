@@ -13,22 +13,11 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <thread>
 
 namespace specfit::api {
-
-// ------------------------------------------------------------------------
-// Out-of-line special members.
-//
-// These types own Eigen matrices, std::vector, std::string and std::function.
-// Defining their special members here forces all corresponding allocations,
-// copies, moves, and destruction to happen inside DIGGAcore's translation
-// units, with DIGGAcore's compile flags (C++ standard, -march, Eigen
-// alignment macros, …). Host TUs that include the header therefore cannot
-// generate divergent inline copies and cannot trip ABI mismatches on
-// cleanup.
-// ------------------------------------------------------------------------
 
 GlobalSettings::GlobalSettings()                                          = default;
 GlobalSettings::~GlobalSettings()                                         = default;
@@ -79,10 +68,9 @@ FitResult::FitResult(FitResult&&) noexcept                                = defa
 FitResult& FitResult::operator=(const FitResult&)                         = default;
 FitResult& FitResult::operator=(FitResult&&) noexcept                     = default;
 
-} // namespace specfit::api
-
-namespace specfit::api {
-
+// ───────────────────────────────────────────────────────────────────────────
+// Pimpl
+// ───────────────────────────────────────────────────────────────────────────
 struct DiggaSession::Impl {
     GlobalSettings gs;
     FitInput       fi;
@@ -91,14 +79,17 @@ struct DiggaSession::Impl {
     LogFn          logger;
 };
 
-DiggaSession::DiggaSession() : impl_(std::make_unique<Impl>()) {}
+DiggaSession::DiggaSession()  : impl_(std::make_unique<Impl>()) {}
 DiggaSession::~DiggaSession() = default;
+DiggaSession::DiggaSession(DiggaSession&&) noexcept = default;
+DiggaSession& DiggaSession::operator=(DiggaSession&&) noexcept = default;
 
 void DiggaSession::set_global_settings(const GlobalSettings& gs) { impl_->gs = gs; }
 void DiggaSession::set_fit_input     (const FitInput& fi)        { impl_->fi = fi; }
 void DiggaSession::set_num_threads(int n)                        { impl_->nthreads = n; }
 void DiggaSession::set_progress_callback(ProgressFn cb)          { impl_->progress = std::move(cb); }
 void DiggaSession::set_log_callback(LogFn cb)                    { impl_->logger  = std::move(cb); }
+
 
 // ---------------------------------------------------------------------------
 namespace {
