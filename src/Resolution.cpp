@@ -5,6 +5,7 @@
 #include <vector>
 #include <tuple>
 #include <list>
+#include <mutex>
 
 #ifdef _OPENMP
   #include <omp.h>
